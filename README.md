@@ -8,8 +8,8 @@
 - **面向 Claude Code 用户** — 订阅了 Pro / Max / Team / Enterprise 套餐、
   日常用 `claude` CLI 的人，ccbar 会把限制你账号的三个 rate-limit 窗口
   直接显示在菜单栏。只用 API key 的账号没有这些配额，ccbar 对他们没意义。
-- **体积极小**：2.8 MB 安装包，空闲约 45 MB 常驻内存、0 % CPU
-  （不做自动轮询 —— 只在启动或按 ⌘R 时发一次 HTTP 请求）。Rust + AppKit
+- **体积极小**：1.0 MB 安装包，空闲约 45 MB 常驻内存、接近 0 % CPU
+  （每 5 分钟自动刷新一次，也可按 ⌘R 手动刷新）。Rust + AppKit
   via [`objc2`]，ad-hoc 签名，无登录、无后台进程、无遥测。
 
 [`objc2`]: https://github.com/madsmtm/objc2
@@ -18,16 +18,15 @@
  ┌─────────────────────────────────────────┐
  │  Claude                   Updated 12:41 │
  │ ─────────────────────────────────────── │
- │  Session                  72%  4h 8m    │
- │    ██░░░░░░                             │
- │  Weekly                   97%  1d 18h   │
- │    ██████░░                             │
- │  Sonnet                   100%          │
- │    ████████                             │
+ │  Session    ██░░░░░░      72%  4h 8m    │
  │ ─────────────────────────────────────── │
- │  ⟳  Refresh                       ⌘R    │
- │  📗  Open on GitHub                      │
- │  🗙  Quit                          ⌘Q    │
+ │  Weekly     ██████░░      97%  1d 18h   │
+ │ ─────────────────────────────────────── │
+ │  Sonnet     ████████      100%          │
+ │ ─────────────────────────────────────── │
+ │  Refresh                           ⌘R   │
+ │  Open on GitHub                         │
+ │  Quit                              ⌘Q   │
  └─────────────────────────────────────────┘
 ```
 
@@ -67,8 +66,8 @@ Weekly（7 天所有模型累计）、Sonnet/Opus（7 天顶级模型专用）�
 
 ## 工作原理
 
-只有一个 HTTP 请求，只在启动或手动 `Refresh`（⌘R）时发出 —— **不做自动轮询**，
-请求频率和"用户偶尔刷一下 dashboard"在 Anthropic 看来无法区分。
+只有一个 HTTP 请求，在启动时、每 5 分钟自动触发、以及手动 `Refresh`（⌘R）
+时发出。请求频率远低于浏览器刷 dashboard。
 
 ```
 GET https://api.anthropic.com/api/oauth/usage
@@ -91,7 +90,7 @@ Access token 从 macOS 钥匙串 service `Claude Code-credentials` 经
 
 ## 不支持
 
-ccbar 按单功能工具设计，以下都不做：多账号切换、自动轮询、从
+ccbar 按单功能工具设计，以下都不做：多账号切换、从
 `~/.claude/projects/*.jsonl` 做本地成本估算、浏览器 cookie / CLI PTY 回退
 路径、Developer ID 签名 + notarization。想要这些，上游的 [CodexBar] 更全。
 
