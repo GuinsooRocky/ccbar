@@ -47,8 +47,16 @@ which cap is about to hit before firing off that big task. See
 >
 > macOS 14+ (Apple Silicon + Intel) · ad-hoc signed · no notarization
 
-1. Double-click the zip to unzip, move `ccbar.app` to `~/Applications` or `/Applications`
-2. First launch: right-click → **Open** (Gatekeeper warning — not notarized)
+1. Double-click the zip to unzip, move `ccbar.app` to `~/Applications` or `/Applications`.
+2. Double-click `ccbar.app`. macOS will refuse with a dialog like
+   *"Apple could not verify ccbar is free of malware"* — **do NOT click
+   "Move to Trash"**. Pick one:
+   - **System Settings → Privacy & Security**, scroll all the way to the
+     bottom, click **Open Anyway** next to the ccbar entry, then launch
+     ccbar again and hit **Open** on the confirmation dialog.
+   - Or in Terminal:
+     `xattr -rd com.apple.quarantine ~/Applications/ccbar.app`, then
+     double-click normally.
 3. macOS asks to access the `Claude Code-credentials` Keychain item — click
    **Always Allow**. You'll enter your Mac login password once. The ACL is
    attached to `/usr/bin/security` (a signed Apple binary), so subsequent

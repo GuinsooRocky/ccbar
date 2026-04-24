@@ -45,8 +45,14 @@ Weekly（7 天所有模型累计）、Sonnet/Opus（7 天顶级模型专用）�
 >
 > macOS 14+（Apple Silicon + Intel）· ad-hoc 签名 · 未做 notarization
 
-1. 双击解压 zip，把 `ccbar.app` 拖到 `~/Applications` 或 `/Applications`
-2. 首次启动：右键 → **打开**（绕过 Gatekeeper 警告，因为未做 notarization）
+1. 双击解压 zip，把 `ccbar.app` 拖到 `~/Applications` 或 `/Applications`。
+2. 双击打开 `ccbar.app`。macOS 会弹出 *"Apple 无法验证 ccbar 是否包含
+   恶意软件"* —— **千万不要点"移到废纸篓"**。二选一：
+   - **系统设置 → 隐私与安全性**，滚动到最底部，点 ccbar 旁边的
+     **仍要打开**，然后再次双击 ccbar 并在确认弹窗点 **打开**。
+   - 或在终端跑一条命令：
+     `xattr -rd com.apple.quarantine ~/Applications/ccbar.app`，之后直接
+     双击打开即可。
 3. macOS 会弹窗请求访问 `Claude Code-credentials` 钥匙串条目 —— 点
    **始终允许**，输入一次 Mac 登录密码。ACL 绑定在 `/usr/bin/security`
    （Apple 自签的系统二进制）上，所以重新编译 ccbar 也不会再弹。
