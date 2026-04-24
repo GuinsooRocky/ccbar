@@ -40,18 +40,26 @@ Weekly（7 天所有模型累计）、Sonnet/Opus（7 天顶级模型专用）�
 
 ## 安装
 
-> ### **[⬇ ccbar v0.2.0 — 524 KB zip](https://github.com/GuinsooRocky/ccbar/releases/download/v0.2.0/ccbar-v0.2.0-macos.zip)**
+> ### **[⬇ ccbar v0.2.1 — 524 KB zip](https://github.com/GuinsooRocky/ccbar/releases/download/v0.2.1/ccbar-v0.2.1-macos.zip)**
 >
 > macOS 14+（Apple Silicon + Intel）· ad-hoc 签名 · 未做 notarization
 
-1. 双击解压 zip，把 `ccbar.app` 拖到 `~/Applications` 或 `/Applications`。
-2. 双击打开 `ccbar.app`。macOS 会弹出 *"Apple 无法验证 ccbar 是否包含
-   恶意软件"* —— **千万不要点"移到废纸篓"**。二选一：
-   - **系统设置 → 隐私与安全性**，滚动到最底部，点 ccbar 旁边的
-     **仍要打开**，然后再次双击 ccbar 并在确认弹窗点 **打开**。
-   - 或在终端跑一条命令：
-     `xattr -rd com.apple.quarantine ~/Applications/ccbar.app`，之后直接
-     双击打开即可。
+> ⚠️ **不要在 Downloads / Desktop 里原地双击**解压出来的 `ccbar.app`。
+> 必须先拖到 `/Applications`，否则 macOS 会把未签名 app 放进 **AppTranslocation
+> 只读沙盒**运行，导致 CPU 持续 100%。v0.2.0 起，ccbar 检测到自己在
+> AppTranslocation 路径时会直接弹窗并退出。
+
+1. 双击解压 zip，把 `ccbar.app` 拖到 `/Applications`。
+2. **推荐**：在终端执行一次命令解除 quarantine，之后双击打开即可、无弹窗、无
+   AppTranslocation：
+   ```bash
+   xattr -rd com.apple.quarantine /Applications/ccbar.app
+   ```
+   **备选**（不想开终端）：直接双击 `ccbar.app` → macOS 弹 *"Apple 无法验证
+   ccbar 是否包含恶意软件"* → **千万不要点"移到废纸篓"** → 进 **系统设置 →
+   隐私与安全性** → 滚动到底部，点 ccbar 旁边的 **仍要打开**，再次双击确认。
+   注意此路径首启有概率进入 AppTranslocation 沙盒，若 ccbar 自检弹窗告知
+   CPU 100%，请按弹窗提示改用上面的 `xattr` 命令。
 3. macOS 会弹窗请求访问 `Claude Code-credentials` 钥匙串条目 —— 点
    **始终允许**，输入一次 Mac 登录密码。ACL 绑定在 `/usr/bin/security`
    （Apple 自签的系统二进制）上，所以重新编译 ccbar 也不会再弹。

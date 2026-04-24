@@ -42,20 +42,28 @@ which cap is about to hit before firing off that big task. See
 
 ## Install
 
-> ### **[⬇ ccbar v0.2.0 — 524 KB zip](https://github.com/GuinsooRocky/ccbar/releases/download/v0.2.0/ccbar-v0.2.0-macos.zip)**
+> ### **[⬇ ccbar v0.2.1 — 524 KB zip](https://github.com/GuinsooRocky/ccbar/releases/download/v0.2.1/ccbar-v0.2.1-macos.zip)**
 >
 > macOS 14+ (Apple Silicon + Intel) · ad-hoc signed · no notarization
 
-1. Double-click the zip to unzip, move `ccbar.app` to `~/Applications` or `/Applications`.
-2. Double-click `ccbar.app`. macOS will refuse with a dialog like
-   *"Apple could not verify ccbar is free of malware"* — **do NOT click
-   "Move to Trash"**. Pick one:
-   - **System Settings → Privacy & Security**, scroll all the way to the
-     bottom, click **Open Anyway** next to the ccbar entry, then launch
-     ccbar again and hit **Open** on the confirmation dialog.
-   - Or in Terminal:
-     `xattr -rd com.apple.quarantine ~/Applications/ccbar.app`, then
-     double-click normally.
+> ⚠️ **Do NOT double-click `ccbar.app` in Downloads / Desktop** after unzipping.
+> Move it to `/Applications` first — otherwise macOS runs unsigned apps from a
+> read-only **AppTranslocation** sandbox, which pins CPU at 100%. From v0.2.0,
+> ccbar detects this and bails out with a dialog instead of hanging.
+
+1. Double-click the zip to unzip, drag `ccbar.app` into `/Applications`.
+2. **Recommended**: in Terminal, strip the quarantine attribute — afterwards a
+   normal double-click works, no Gatekeeper dialog, no AppTranslocation:
+   ```bash
+   xattr -rd com.apple.quarantine /Applications/ccbar.app
+   ```
+   **Alternative** (no Terminal): double-click `ccbar.app` → macOS shows
+   *"Apple could not verify ccbar is free of malware"* → **do NOT click
+   "Move to Trash"** → open **System Settings → Privacy & Security**, scroll
+   to the bottom, click **Open Anyway** next to the ccbar entry, then
+   double-click again to confirm. Note: this path may trigger AppTranslocation
+   on first launch; if ccbar shows its 100%-CPU warning dialog, follow it and
+   run the `xattr` command above.
 3. macOS asks to access the `Claude Code-credentials` Keychain item — click
    **Always Allow**. You'll enter your Mac login password once. The ACL is
    attached to `/usr/bin/security` (a signed Apple binary), so subsequent
