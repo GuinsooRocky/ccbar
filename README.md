@@ -1,7 +1,5 @@
 **English** · [中文](./README.zh-CN.md)
 
-**English** · [中文](./README.zh-CN.md)
-
 # ccbar
 
 A tiny macOS 14+ menu bar app that surfaces your **Claude Code** usage
