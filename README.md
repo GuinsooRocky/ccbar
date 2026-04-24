@@ -51,14 +51,22 @@ for the full window semantics.
 API-key-only users have no session/weekly/sonnet quotas to display, so ccbar
 is not useful for them.
 
-## Install
+## Download
 
-### Prebuilt .app
+> ### **[⬇ ccbar v0.1.0 — 1.4 MB zip](https://github.com/GuinsooRocky/ccbar/releases/download/v0.1.0/ccbar-v0.1.0-macos.zip)**
+>
+> macOS 14+ (Apple Silicon + Intel) · ad-hoc signed · no notarization
 
-Grab `ccbar.app` from [Releases](https://github.com/GuinsooRocky/ccbar/releases)
-(when available), move it to `~/Applications` or `/Applications`, and launch.
+All versions on the [Releases page](https://github.com/GuinsooRocky/ccbar/releases).
 
-### Build from source
+### Install
+
+1. Double-click the zip to unzip
+2. Move `ccbar.app` to `~/Applications` or `/Applications`
+3. First launch: right-click → **Open** (Gatekeeper warning — not notarized)
+4. Click **Always Allow** when macOS asks for Keychain access (see [First run](#first-run))
+
+## Build from source
 
 ```bash
 git clone https://github.com/GuinsooRocky/ccbar.git
