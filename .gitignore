@@ -1,0 +1,4 @@
+/target
+/ccbar.app
+**/*.rs.bk
+.DS_Store

@@ -1,0 +1,432 @@
+mod credentials;
+mod usage_api;
+
+use std::cell::RefCell;
+
+use objc2::rc::Retained;
+use objc2::runtime::AnyObject;
+use objc2::{
+    AnyThread, DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel,
+};
+use objc2_app_kit::{
+    NSApplication, NSApplicationActivationPolicy, NSBezierPath, NSColor, NSImage, NSMenu,
+    NSMenuItem, NSStackView, NSStackViewDistribution, NSStatusBar, NSStatusItem, NSTextField,
+    NSUserInterfaceLayoutOrientation, NSVariableStatusItemLength, NSView, NSWorkspace,
+};
+use objc2_foundation::{NSArray, NSEdgeInsets, NSObject, NSPoint, NSRect, NSSize, NSString, NSURL};
+
+const REPO_URL: &str = "https://github.com/GuinsooRocky/ccbar";
+
+use usage_api::{UsageSnapshot, WindowState};
+
+enum MenuState {
+    Ok(UsageSnapshot),
+    Error(String),
+}
+
+struct AppState {
+    access_token: String,
+    menu: Retained<NSMenu>,
+    controller: Retained<RefreshController>,
+    status_item: Retained<NSStatusItem>,
+}
+
+thread_local! {
+    static APP_STATE: RefCell<Option<AppState>> = const { RefCell::new(None) };
+}
+
+define_class!(
+    #[unsafe(super(NSObject))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "CCBarRefreshController"]
+    struct RefreshController;
+
+    impl RefreshController {
+        #[unsafe(method(handleRefresh:))]
+        fn handle_refresh(&self, _sender: *mut AnyObject) {
+            refresh_now();
+        }
+
+        #[unsafe(method(openRepo:))]
+        fn open_repo(&self, _sender: *mut AnyObject) {
+            open_url(REPO_URL);
+        }
+    }
+);
+
+impl RefreshController {
+    fn new(mtm: MainThreadMarker) -> Retained<Self> {
+        let this = mtm.alloc::<Self>().set_ivars(());
+        unsafe { msg_send![super(this), init] }
+    }
+}
+
+fn main() {
+    let creds = match credentials::Credentials::load() {
+        Ok(c) => {
+            let tail: String = c
+                .access_token
+                .chars()
+                .rev()
+                .take(6)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect();
+            eprintln!(
+                "ccbar: credentials ok — source={:?} token=...{} tier={:?} has_user_profile={}",
+                c.source,
+                tail,
+                c.rate_limit_tier,
+                c.has_user_profile_scope(),
+            );
+            c
+        }
+        Err(e) => {
+            eprintln!("ccbar: credentials error: {e}");
+            // Still boot so the user sees an error menu rather than silent exit.
+            run_with_error(format!("credentials: {e}"));
+            return;
+        }
+    };
+
+    let mtm = MainThreadMarker::new().expect("must run on main thread");
+    let app = NSApplication::sharedApplication(mtm);
+    app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
+
+    let status_bar = NSStatusBar::systemStatusBar();
+    let status_item = status_bar.statusItemWithLength(NSVariableStatusItemLength);
+
+    let menu = NSMenu::new(mtm);
+    let controller = RefreshController::new(mtm);
+    status_item.setMenu(Some(&menu));
+
+    APP_STATE.with(|cell| {
+        *cell.borrow_mut() = Some(AppState {
+            access_token: creds.access_token.clone(),
+            menu: menu.clone(),
+            controller: controller.clone(),
+            status_item: status_item.clone(),
+        });
+    });
+
+    let initial = fetch_state(&creds.access_token);
+    update_icon(&status_item, mtm, &initial);
+    populate_menu(&menu, mtm, &initial, &controller);
+
+    app.run();
+}
+
+fn run_with_error(msg: String) {
+    let mtm = MainThreadMarker::new().expect("must run on main thread");
+    let app = NSApplication::sharedApplication(mtm);
+    app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
+
+    let status_bar = NSStatusBar::systemStatusBar();
+    let status_item = status_bar.statusItemWithLength(NSVariableStatusItemLength);
+
+    let menu = NSMenu::new(mtm);
+    let controller = RefreshController::new(mtm);
+    let state = MenuState::Error(msg);
+    update_icon(&status_item, mtm, &state);
+    populate_menu(&menu, mtm, &state, &controller);
+    status_item.setMenu(Some(&menu));
+
+    let _keep = status_item;
+    app.run();
+}
+
+fn fetch_state(token: &str) -> MenuState {
+    match usage_api::fetch_usage(token) {
+        Ok(snap) => {
+            eprintln!(
+                "ccbar: usage ok — session={:.0}% used, weekly={}, sonnet={}",
+                snap.session.fraction_used * 100.0,
+                snap.weekly
+                    .as_ref()
+                    .map(|w| format!("{:.0}%", w.fraction_used * 100.0))
+                    .unwrap_or_else(|| "n/a".into()),
+                snap.sonnet
+                    .as_ref()
+                    .map(|w| format!("{:.0}%", w.fraction_used * 100.0))
+                    .unwrap_or_else(|| "n/a".into()),
+            );
+            MenuState::Ok(snap)
+        }
+        Err(e) => {
+            let mut chain = format!("{e}");
+            let mut src: Option<&dyn std::error::Error> = std::error::Error::source(&e);
+            while let Some(s) = src {
+                chain.push_str(&format!(" <- {s}"));
+                src = s.source();
+            }
+            eprintln!("ccbar: usage error: {chain}");
+            MenuState::Error(format!("usage API: {e}"))
+        }
+    }
+}
+
+fn refresh_now() {
+    let Some(mtm) = MainThreadMarker::new() else {
+        eprintln!("ccbar: refresh_now called off main thread — skipping");
+        return;
+    };
+    APP_STATE.with(|cell| {
+        let borrow = cell.borrow();
+        let Some(state) = &*borrow else { return };
+        let new_state = fetch_state(&state.access_token);
+        update_icon(&state.status_item, mtm, &new_state);
+        populate_menu(&state.menu, mtm, &new_state, &state.controller);
+    });
+}
+
+fn populate_menu(
+    menu: &NSMenu,
+    mtm: MainThreadMarker,
+    state: &MenuState,
+    controller: &RefreshController,
+) {
+    menu.removeAllItems();
+
+    match state {
+        MenuState::Ok(snap) => {
+            let local = snap.fetched_at.with_timezone(&chrono::Local);
+            let updated = format!("Updated {}", local.format("%H:%M"));
+            add_two_column_row(menu, mtm, "Claude", &updated);
+            menu.addItem(&NSMenuItem::separatorItem(mtm));
+
+            add_window_section(menu, mtm, "Session", Some(&snap.session));
+            menu.addItem(&NSMenuItem::separatorItem(mtm));
+
+            add_window_section(menu, mtm, "Weekly", snap.weekly.as_ref());
+            menu.addItem(&NSMenuItem::separatorItem(mtm));
+
+            add_window_section(menu, mtm, "Sonnet", snap.sonnet.as_ref());
+            menu.addItem(&NSMenuItem::separatorItem(mtm));
+        }
+        MenuState::Error(msg) => {
+            add_label(menu, mtm, "Claude  error");
+            menu.addItem(&NSMenuItem::separatorItem(mtm));
+            for chunk in wrap(msg, 60) {
+                add_label(menu, mtm, chunk);
+            }
+            menu.addItem(&NSMenuItem::separatorItem(mtm));
+        }
+    }
+
+    let refresh = NSMenuItem::new(mtm);
+    refresh.setTitle(&NSString::from_str("Refresh"));
+    refresh.setKeyEquivalent(&NSString::from_str("r"));
+    if let Some(icon) = load_symbol("arrow.clockwise") {
+        refresh.setImage(Some(&icon));
+    }
+    unsafe {
+        refresh.setTarget(Some(controller));
+        refresh.setAction(Some(sel!(handleRefresh:)));
+    }
+    menu.addItem(&refresh);
+
+    let about = NSMenuItem::new(mtm);
+    about.setTitle(&NSString::from_str("Open on GitHub"));
+    if let Some(icon) = load_symbol("book.closed") {
+        about.setImage(Some(&icon));
+    }
+    unsafe {
+        about.setTarget(Some(controller));
+        about.setAction(Some(sel!(openRepo:)));
+    }
+    menu.addItem(&about);
+
+    let quit = NSMenuItem::new(mtm);
+    quit.setTitle(&NSString::from_str("Quit"));
+    quit.setKeyEquivalent(&NSString::from_str("q"));
+    unsafe { quit.setAction(Some(sel!(terminate:))) };
+    menu.addItem(&quit);
+}
+
+fn window_summary(w: &WindowState) -> String {
+    let left = w.percent_left();
+    let reset = w.reset_label();
+    if reset.is_empty() {
+        format!("{left}%")
+    } else {
+        format!("{left}%  {reset}")
+    }
+}
+
+fn add_window_section(
+    menu: &NSMenu,
+    mtm: MainThreadMarker,
+    label: &str,
+    w: Option<&WindowState>,
+) {
+    match w {
+        Some(w) => {
+            add_two_column_row(menu, mtm, label, &window_summary(w));
+            add_label(menu, mtm, format!("  {}", make_bar(w.fraction_used, 8)));
+        }
+        None => {
+            add_two_column_row(menu, mtm, label, "no data");
+        }
+    }
+}
+
+fn make_bar(fraction_used: f64, width: usize) -> String {
+    let filled = (fraction_used.clamp(0.0, 1.0) * width as f64).round() as usize;
+    let empty = width.saturating_sub(filled);
+    "█".repeat(filled) + &"░".repeat(empty)
+}
+
+fn load_symbol(name: &str) -> Option<Retained<NSImage>> {
+    unsafe {
+        NSImage::imageWithSystemSymbolName_accessibilityDescription(
+            &NSString::from_str(name),
+            None,
+        )
+    }
+}
+
+fn update_icon(status_item: &NSStatusItem, mtm: MainThreadMarker, state: &MenuState) {
+    let Some(button) = status_item.button(mtm) else { return };
+    match state {
+        MenuState::Ok(snap) => {
+            let session = snap.session.fraction_used.clamp(0.0, 1.0);
+            let weekly = snap
+                .weekly
+                .as_ref()
+                .map(|w| w.fraction_used.clamp(0.0, 1.0))
+                .unwrap_or(0.0);
+            let img = render_meter_icon(session, weekly);
+            button.setImage(Some(&img));
+            button.setTitle(&NSString::from_str(""));
+        }
+        MenuState::Error(_) => {
+            if let Some(img) = load_symbol("exclamationmark.triangle.fill") {
+                button.setImage(Some(&img));
+                button.setTitle(&NSString::from_str(""));
+            }
+        }
+    }
+}
+
+/// Two stacked horizontal meters: thicker top = session (5h), thinner bottom = weekly (7d).
+/// Rendered as a template image so macOS auto-inverts for dark/light menu bar.
+fn render_meter_icon(session_used: f64, weekly_used: f64) -> Retained<NSImage> {
+    let size = NSSize::new(22.0, 14.0);
+    let image = unsafe { NSImage::initWithSize(NSImage::alloc(), size) };
+
+    unsafe { image.lockFocus() };
+
+    let margin_x: f64 = 2.0;
+    let bar_width: f64 = size.width - margin_x * 2.0;
+    let top_y: f64 = 8.0;
+    let top_h: f64 = 3.5;
+    let bot_y: f64 = 3.5;
+    let bot_h: f64 = 1.5;
+
+    // Tracks (subtle outline so empty bars are still visible on busy wallpapers).
+    let track_color = unsafe { NSColor::labelColor().colorWithAlphaComponent(0.25) };
+    unsafe { track_color.set() };
+    let top_track = NSRect::new(NSPoint::new(margin_x, top_y), NSSize::new(bar_width, top_h));
+    let bot_track = NSRect::new(NSPoint::new(margin_x, bot_y), NSSize::new(bar_width, bot_h));
+    unsafe { NSBezierPath::fillRect(top_track) };
+    unsafe { NSBezierPath::fillRect(bot_track) };
+
+    // Filled portions.
+    unsafe { NSColor::labelColor().set() };
+    let top_fill = NSRect::new(
+        NSPoint::new(margin_x, top_y),
+        NSSize::new(bar_width * session_used, top_h),
+    );
+    let bot_fill = NSRect::new(
+        NSPoint::new(margin_x, bot_y),
+        NSSize::new(bar_width * weekly_used, bot_h),
+    );
+    unsafe { NSBezierPath::fillRect(top_fill) };
+    unsafe { NSBezierPath::fillRect(bot_fill) };
+
+    unsafe { image.unlockFocus() };
+    image.setTemplate(true);
+    image
+}
+
+fn open_url(s: &str) {
+    let Some(url) = (unsafe { NSURL::URLWithString(&NSString::from_str(s)) }) else {
+        eprintln!("ccbar: invalid URL: {s}");
+        return;
+    };
+    let workspace = unsafe { NSWorkspace::sharedWorkspace() };
+    unsafe { workspace.openURL(&url) };
+}
+
+fn add_label(menu: &NSMenu, mtm: MainThreadMarker, text: impl AsRef<str>) {
+    let item = NSMenuItem::new(mtm);
+    item.setTitle(&NSString::from_str(text.as_ref()));
+    item.setEnabled(false);
+    menu.addItem(&item);
+}
+
+/// Menu item whose body is a horizontal NSStackView (AppKit's flexbox) with
+/// `.equalSpacing` distribution — left label hugs the left edge, right label
+/// hugs the right edge, spacer in between. Replaces the prior tab-stop
+/// approach because NSAttributedString tab stops can't reach the far-right
+/// edge inside AppKit's standard menu item layout.
+fn add_two_column_row(menu: &NSMenu, mtm: MainThreadMarker, left: &str, right: &str) {
+    const ROW_WIDTH: f64 = 280.0;
+    const ROW_HEIGHT: f64 = 26.0;
+    const H_INSET: f64 = 14.0; // matches native menu item horizontal padding
+
+    let left_label = NSTextField::labelWithString(&NSString::from_str(left), mtm);
+    let right_label = NSTextField::labelWithString(&NSString::from_str(right), mtm);
+    unsafe {
+        left_label.setTextColor(Some(&NSColor::secondaryLabelColor()));
+        right_label.setTextColor(Some(&NSColor::secondaryLabelColor()));
+    }
+
+    // NSTextField -> NSControl -> NSView.
+    let left_view: Retained<NSView> = left_label.into_super().into_super();
+    let right_view: Retained<NSView> = right_label.into_super().into_super();
+    let views: Retained<NSArray<NSView>> = NSArray::from_retained_slice(&[left_view, right_view]);
+
+    let stack = unsafe { NSStackView::stackViewWithViews(&views, mtm) };
+    unsafe {
+        stack.setOrientation(NSUserInterfaceLayoutOrientation::Horizontal);
+        stack.setDistribution(NSStackViewDistribution::EqualSpacing);
+        stack.setEdgeInsets(NSEdgeInsets {
+            top: 4.0,
+            left: H_INSET,
+            bottom: 4.0,
+            right: H_INSET,
+        });
+        stack.setFrame(NSRect::new(
+            NSPoint::new(0.0, 0.0),
+            NSSize::new(ROW_WIDTH, ROW_HEIGHT),
+        ));
+    }
+
+    let item = NSMenuItem::new(mtm);
+    item.setView(Some(&stack));
+    item.setEnabled(false);
+    menu.addItem(&item);
+}
+
+fn wrap(s: &str, width: usize) -> Vec<String> {
+    let mut out = vec![];
+    let mut line = String::new();
+    for word in s.split_whitespace() {
+        if !line.is_empty() && line.chars().count() + 1 + word.chars().count() > width {
+            out.push(std::mem::take(&mut line));
+        }
+        if !line.is_empty() {
+            line.push(' ');
+        }
+        line.push_str(word);
+    }
+    if !line.is_empty() {
+        out.push(line);
+    }
+    if out.is_empty() {
+        out.push(String::new());
+    }
+    out
+}
