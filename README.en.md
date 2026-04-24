@@ -9,8 +9,8 @@ quotas (Session / Weekly / Sonnet) right in the menu bar.
   If `claude` is your daily driver, ccbar shows the three rate-limit windows
   that cap your account. API-key-only accounts have no such quotas and
   won't benefit.
-- **Tiny footprint**: 2.8 MB bundle, ~45 MB RAM idle, 0 % CPU when idle
-  (no automatic polling — HTTP only fires on launch or ⌘R). Rust + AppKit
+- **Tiny footprint**: 1.0 MB bundle, ~45 MB RAM idle, ~0 % CPU when idle
+  (auto-refresh every 5 minutes, also manual ⌘R). Rust + AppKit
   via [`objc2`], ad-hoc signed, no login, no daemon, no telemetry.
 
 [`objc2`]: https://github.com/madsmtm/objc2
@@ -19,16 +19,15 @@ quotas (Session / Weekly / Sonnet) right in the menu bar.
  ┌─────────────────────────────────────────┐
  │  Claude                   Updated 12:41 │
  │ ─────────────────────────────────────── │
- │  Session                  72%  4h 8m    │
- │    ██░░░░░░                             │
- │  Weekly                   97%  1d 18h   │
- │    ██████░░                             │
- │  Sonnet                   100%          │
- │    ████████                             │
+ │  Session    ██░░░░░░      72%  4h 8m    │
  │ ─────────────────────────────────────── │
- │  ⟳  Refresh                       ⌘R    │
- │  📗  Open on GitHub                      │
- │  🗙  Quit                          ⌘Q    │
+ │  Weekly     ██████░░      97%  1d 18h   │
+ │ ─────────────────────────────────────── │
+ │  Sonnet     ████████      100%          │
+ │ ─────────────────────────────────────── │
+ │  Refresh                           ⌘R   │
+ │  Open on GitHub                         │
+ │  Quit                              ⌘Q   │
  └─────────────────────────────────────────┘
 ```
 
@@ -72,9 +71,8 @@ Building from source: `cargo build --release && ./packaging/bundle.sh release`.
 
 ## How it works
 
-One HTTP call, only on launch or manual `Refresh` (⌘R) — **no automatic
-polling**, so request volume is indistinguishable from a human checking the
-dashboard occasionally.
+One HTTP call, fired on launch, every 5 minutes automatically, and on manual
+`Refresh` (⌘R). Request volume stays well below a browser dashboard refresh.
 
 ```
 GET https://api.anthropic.com/api/oauth/usage
@@ -98,11 +96,10 @@ surface. Full recovered schema in [`REFERENCE.md`](./REFERENCE.md).
 
 ## Not supported
 
-By design this is a single-purpose tool. Multi-account switching, automatic
-polling timers, local cost estimation from `~/.claude/projects/*.jsonl`, web
-cookie / CLI PTY fallbacks, and Developer ID signing + notarization are all
-out of scope. If you want any of those, upstream [CodexBar] is the
-fuller-featured option.
+By design this is a single-purpose tool. Multi-account switching, local cost
+estimation from `~/.claude/projects/*.jsonl`, web cookie / CLI PTY fallbacks,
+and Developer ID signing + notarization are all out of scope. If you want
+any of those, upstream [CodexBar] is the fuller-featured option.
 
 [CodexBar]: https://github.com/steipete/CodexBar
 

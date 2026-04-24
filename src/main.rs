@@ -10,12 +10,16 @@ use objc2::{
 };
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSBezierPath, NSColor, NSImage, NSMenu,
-    NSMenuItem, NSStackView, NSStackViewDistribution, NSStatusBar, NSStatusItem, NSTextField,
-    NSUserInterfaceLayoutOrientation, NSVariableStatusItemLength, NSView, NSWorkspace,
+    NSMenuItem, NSStackView, NSStackViewDistribution, NSStatusBar, NSStatusItem, NSTextAlignment,
+    NSTextField, NSUserInterfaceLayoutOrientation, NSVariableStatusItemLength, NSView, NSWorkspace,
 };
-use objc2_foundation::{NSArray, NSEdgeInsets, NSObject, NSPoint, NSRect, NSSize, NSString, NSURL};
+use objc2_foundation::{
+    NSArray, NSEdgeInsets, NSObject, NSPoint, NSRect, NSSize, NSString, NSTimeInterval, NSTimer,
+    NSURL,
+};
 
 const REPO_URL: &str = "https://github.com/GuinsooRocky/ccbar";
+const REFRESH_INTERVAL_SECS: NSTimeInterval = 300.0;
 
 use usage_api::{UsageSnapshot, WindowState};
 
@@ -50,6 +54,15 @@ define_class!(
         #[unsafe(method(openRepo:))]
         fn open_repo(&self, _sender: *mut AnyObject) {
             open_url(REPO_URL);
+        }
+
+        // Indirection around `terminate:` — macOS auto-assigns an ⊠ icon
+        // to menu items wired directly to that selector.
+        #[unsafe(method(handleQuit:))]
+        fn handle_quit(&self, _sender: *mut AnyObject) {
+            if let Some(mtm) = MainThreadMarker::new() {
+                unsafe { NSApplication::sharedApplication(mtm).terminate(None) };
+            }
         }
     }
 );
@@ -113,6 +126,16 @@ fn main() {
     let initial = fetch_state(&creds.access_token);
     update_icon(&status_item, mtm, &initial);
     populate_menu(&menu, mtm, &initial, &controller);
+
+    unsafe {
+        NSTimer::scheduledTimerWithTimeInterval_target_selector_userInfo_repeats(
+            REFRESH_INTERVAL_SECS,
+            &*controller,
+            sel!(handleRefresh:),
+            None,
+            true,
+        );
+    }
 
     app.run();
 }
@@ -192,7 +215,7 @@ fn populate_menu(
         MenuState::Ok(snap) => {
             let local = snap.fetched_at.with_timezone(&chrono::Local);
             let updated = format!("Updated {}", local.format("%H:%M"));
-            add_two_column_row(menu, mtm, "Claude", &updated);
+            add_row(menu, mtm, &["Claude", &updated]);
             menu.addItem(&NSMenuItem::separatorItem(mtm));
 
             add_window_section(menu, mtm, "Session", Some(&snap.session));
@@ -217,9 +240,6 @@ fn populate_menu(
     let refresh = NSMenuItem::new(mtm);
     refresh.setTitle(&NSString::from_str("Refresh"));
     refresh.setKeyEquivalent(&NSString::from_str("r"));
-    if let Some(icon) = load_symbol("arrow.clockwise") {
-        refresh.setImage(Some(&icon));
-    }
     unsafe {
         refresh.setTarget(Some(controller));
         refresh.setAction(Some(sel!(handleRefresh:)));
@@ -228,9 +248,6 @@ fn populate_menu(
 
     let about = NSMenuItem::new(mtm);
     about.setTitle(&NSString::from_str("Open on GitHub"));
-    if let Some(icon) = load_symbol("book.closed") {
-        about.setImage(Some(&icon));
-    }
     unsafe {
         about.setTarget(Some(controller));
         about.setAction(Some(sel!(openRepo:)));
@@ -240,7 +257,10 @@ fn populate_menu(
     let quit = NSMenuItem::new(mtm);
     quit.setTitle(&NSString::from_str("Quit"));
     quit.setKeyEquivalent(&NSString::from_str("q"));
-    unsafe { quit.setAction(Some(sel!(terminate:))) };
+    unsafe {
+        quit.setTarget(Some(controller));
+        quit.setAction(Some(sel!(handleQuit:)));
+    }
     menu.addItem(&quit);
 }
 
@@ -262,11 +282,10 @@ fn add_window_section(
 ) {
     match w {
         Some(w) => {
-            add_two_column_row(menu, mtm, label, &window_summary(w));
-            add_label(menu, mtm, format!("  {}", make_bar(w.fraction_used, 8)));
+            add_row(menu, mtm, &[label, &make_bar(w.fraction_used, 8), &window_summary(w)]);
         }
         None => {
-            add_two_column_row(menu, mtm, label, "no data");
+            add_row(menu, mtm, &[label, "no data"]);
         }
     }
 }
@@ -366,27 +385,35 @@ fn add_label(menu: &NSMenu, mtm: MainThreadMarker, text: impl AsRef<str>) {
     menu.addItem(&item);
 }
 
-/// Menu item whose body is a horizontal NSStackView (AppKit's flexbox) with
-/// `.equalSpacing` distribution — left label hugs the left edge, right label
-/// hugs the right edge, spacer in between. Replaces the prior tab-stop
-/// approach because NSAttributedString tab stops can't reach the far-right
-/// edge inside AppKit's standard menu item layout.
-fn add_two_column_row(menu: &NSMenu, mtm: MainThreadMarker, left: &str, right: &str) {
+/// Horizontal row of N secondary-color labels laid out via NSStackView with
+/// `.equalSpacing` — first hugs left, last hugs right, the rest spaced evenly.
+/// The last column is pinned to a fixed width + right-aligned so variable
+/// summary strings (e.g. "100%" vs "76% 3h 35m") don't shift the bar column.
+fn add_row(menu: &NSMenu, mtm: MainThreadMarker, cols: &[&str]) {
     const ROW_WIDTH: f64 = 280.0;
     const ROW_HEIGHT: f64 = 26.0;
     const H_INSET: f64 = 14.0; // matches native menu item horizontal padding
+    const RIGHT_COL_WIDTH: f64 = 90.0; // wide enough for "XX%  Xd XXh"
 
-    let left_label = NSTextField::labelWithString(&NSString::from_str(left), mtm);
-    let right_label = NSTextField::labelWithString(&NSString::from_str(right), mtm);
-    unsafe {
-        left_label.setTextColor(Some(&NSColor::secondaryLabelColor()));
-        right_label.setTextColor(Some(&NSColor::secondaryLabelColor()));
-    }
-
-    // NSTextField -> NSControl -> NSView.
-    let left_view: Retained<NSView> = left_label.into_super().into_super();
-    let right_view: Retained<NSView> = right_label.into_super().into_super();
-    let views: Retained<NSArray<NSView>> = NSArray::from_retained_slice(&[left_view, right_view]);
+    let n = cols.len();
+    let views: Vec<Retained<NSView>> = cols
+        .iter()
+        .enumerate()
+        .map(|(i, text)| {
+            let label = NSTextField::labelWithString(&NSString::from_str(text), mtm);
+            unsafe { label.setTextColor(Some(&NSColor::secondaryLabelColor())) };
+            if i + 1 == n && n >= 2 {
+                unsafe { label.setAlignment(NSTextAlignment::Right) };
+                let anchor = unsafe { label.widthAnchor() };
+                let constraint =
+                    unsafe { anchor.constraintEqualToConstant(RIGHT_COL_WIDTH) };
+                unsafe { constraint.setActive(true) };
+            }
+            // NSTextField -> NSControl -> NSView.
+            label.into_super().into_super()
+        })
+        .collect();
+    let views: Retained<NSArray<NSView>> = NSArray::from_retained_slice(&views);
 
     let stack = unsafe { NSStackView::stackViewWithViews(&views, mtm) };
     unsafe {
