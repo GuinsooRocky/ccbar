@@ -1,8 +1,15 @@
 # ccbar
 
-A tiny macOS 14+ menu bar app that shows your **Claude Code** usage quotas
-(Session / Weekly / Sonnet) at a glance — no login, no daemon, no telemetry.
-Rust + AppKit via [`objc2`], ad-hoc signed, **2.8 MB**.
+A tiny macOS 14+ menu bar app that surfaces your **Claude Code** usage
+quotas (Session / Weekly / Sonnet) right in the menu bar.
+
+- **For Claude Code users** on a Pro / Max / Team / Enterprise subscription.
+  If `claude` is your daily driver, ccbar shows the three rate-limit windows
+  that cap your account. API-key-only accounts have no such quotas and
+  won't benefit.
+- **Tiny footprint**: 2.8 MB bundle, ~45 MB RAM idle, 0 % CPU when idle
+  (no automatic polling — HTTP only fires on launch or ⌘R). Rust + AppKit
+  via [`objc2`], ad-hoc signed, no login, no daemon, no telemetry.
 
 [`objc2`]: https://github.com/madsmtm/objc2
 
