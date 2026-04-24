@@ -1,17 +1,16 @@
-**English** · [中文](./README.zh-CN.md)
+[English](./README.en.md) · **中文**
 
 # ccbar
 
-A tiny macOS 14+ menu bar app that surfaces your **Claude Code** usage
-quotas (Session / Weekly / Sonnet) right in the menu bar.
+一个小巧的 macOS 14+ 菜单栏 App，把你的 **Claude Code** 用量配额
+（Session / Weekly / Sonnet）直接显示在菜单栏上。
 
-- **For Claude Code users** on a Pro / Max / Team / Enterprise subscription.
-  If `claude` is your daily driver, ccbar shows the three rate-limit windows
-  that cap your account. API-key-only accounts have no such quotas and
-  won't benefit.
-- **Tiny footprint**: 2.8 MB bundle, ~45 MB RAM idle, 0 % CPU when idle
-  (no automatic polling — HTTP only fires on launch or ⌘R). Rust + AppKit
-  via [`objc2`], ad-hoc signed, no login, no daemon, no telemetry.
+- **面向 Claude Code 用户** — 订阅了 Pro / Max / Team / Enterprise 套餐、
+  日常用 `claude` CLI 的人，ccbar 会把限制你账号的三个 rate-limit 窗口
+  直接显示在菜单栏。只用 API key 的账号没有这些配额，ccbar 对他们没意义。
+- **体积极小**：2.8 MB 安装包，空闲约 45 MB 常驻内存、0 % CPU
+  （不做自动轮询 —— 只在启动或按 ⌘R 时发一次 HTTP 请求）。Rust + AppKit
+  via [`objc2`]，ad-hoc 签名，无登录、无后台进程、无遥测。
 
 [`objc2`]: https://github.com/madsmtm/objc2
 
@@ -32,49 +31,44 @@ quotas (Session / Weekly / Sonnet) right in the menu bar.
  └─────────────────────────────────────────┘
 ```
 
-The status bar icon is a two-bar meter (top = 5-hour Session, bottom = 7-day
-Weekly), template-mode so it auto-inverts for light/dark menu bars.
+菜单栏图标是两条横向 meter（上条 = 5 小时 Session，下条 = 7 天 Weekly），
+template 模式下会根据菜单栏深/浅色自动反色。
 
-Anthropic caps each Claude account with three independent windows — Session
-(5h rolling), Weekly (7d all-models), and Sonnet/Opus (7d premium) — and any
-one hitting zero throttles you. ccbar keeps all three visible so you see
-which cap is about to hit before firing off that big task. See
-[`REFERENCE.md`](./REFERENCE.md) for the full window semantics.
+Anthropic 对每个 Claude 账号设三个独立的配额窗口 —— Session（5 小时滚动）、
+Weekly（7 天所有模型累计）、Sonnet/Opus（7 天顶级模型专用）—— 任何一个见底
+都会让你被限流。ccbar 把三个窗口同时显示，让你在跑大任务前先知道哪条最紧。
+窗口语义详见 [`REFERENCE.md`](./REFERENCE.md)（英文）。
 
-## Install
+## 安装
 
 > ### **[⬇ ccbar v0.1.0 — 1.4 MB zip](https://github.com/GuinsooRocky/ccbar/releases/download/v0.1.0/ccbar-v0.1.0-macos.zip)**
 >
-> macOS 14+ (Apple Silicon + Intel) · ad-hoc signed · no notarization
+> macOS 14+（Apple Silicon + Intel）· ad-hoc 签名 · 未做 notarization
 
-1. Double-click the zip to unzip, move `ccbar.app` to `~/Applications` or `/Applications`.
-2. Double-click `ccbar.app`. macOS will refuse with a dialog like
-   *"Apple could not verify ccbar is free of malware"* — **do NOT click
-   "Move to Trash"**. Pick one:
-   - **System Settings → Privacy & Security**, scroll all the way to the
-     bottom, click **Open Anyway** next to the ccbar entry, then launch
-     ccbar again and hit **Open** on the confirmation dialog.
-   - Or in Terminal:
-     `xattr -rd com.apple.quarantine ~/Applications/ccbar.app`, then
-     double-click normally.
-3. macOS asks to access the `Claude Code-credentials` Keychain item — click
-   **Always Allow**. You'll enter your Mac login password once. The ACL is
-   attached to `/usr/bin/security` (a signed Apple binary), so subsequent
-   launches never prompt again, even after rebuilding ccbar itself.
+1. 双击解压 zip，把 `ccbar.app` 拖到 `~/Applications` 或 `/Applications`。
+2. 双击打开 `ccbar.app`。macOS 会弹出 *"Apple 无法验证 ccbar 是否包含
+   恶意软件"* —— **千万不要点"移到废纸篓"**。二选一：
+   - **系统设置 → 隐私与安全性**，滚动到最底部，点 ccbar 旁边的
+     **仍要打开**，然后再次双击 ccbar 并在确认弹窗点 **打开**。
+   - 或在终端跑一条命令：
+     `xattr -rd com.apple.quarantine ~/Applications/ccbar.app`，之后直接
+     双击打开即可。
+3. macOS 会弹窗请求访问 `Claude Code-credentials` 钥匙串条目 —— 点
+   **始终允许**，输入一次 Mac 登录密码。ACL 绑定在 `/usr/bin/security`
+   （Apple 自签的系统二进制）上，所以重新编译 ccbar 也不会再弹。
 
-**Requirements**: an active Claude **Pro / Max / Team / Enterprise**
-subscription, and the `claude` CLI already signed in on this machine so the
-Keychain holds a token with the `user:profile` scope (modern `claude login`
-produces this by default; if ccbar complains, run `claude setup-token`).
-API-key-only accounts have no session/weekly/sonnet quotas to show.
+**前置条件**：开通 Claude **Pro / Max / Team / Enterprise** 订阅，并在
+本机用 `claude` CLI 登录过（让钥匙串里保留带 `user:profile` scope 的 token）。
+新版 `claude login` 默认产出 `user:profile`；如果 ccbar 报错缺 scope，跑
+`claude setup-token` 重新签发。只用 API key 的账号不存在 session/weekly/sonnet
+配额，ccbar 对他们没意义。
 
-Building from source: `cargo build --release && ./packaging/bundle.sh release`.
+源码构建：`cargo build --release && ./packaging/bundle.sh release`。
 
-## How it works
+## 工作原理
 
-One HTTP call, only on launch or manual `Refresh` (⌘R) — **no automatic
-polling**, so request volume is indistinguishable from a human checking the
-dashboard occasionally.
+只有一个 HTTP 请求，只在启动或手动 `Refresh`（⌘R）时发出 —— **不做自动轮询**，
+请求频率和"用户偶尔刷一下 dashboard"在 Anthropic 看来无法区分。
 
 ```
 GET https://api.anthropic.com/api/oauth/usage
@@ -83,36 +77,31 @@ GET https://api.anthropic.com/api/oauth/usage
     User-Agent: claude-code/2.1.0
 ```
 
-| Response field                                      | Menu row |
-|-----------------------------------------------------|----------|
-| `five_hour`                                         | Session  |
-| `seven_day`                                         | Weekly   |
-| `seven_day_sonnet` (falls back to `seven_day_opus`) | Sonnet   |
+| 响应字段                                                | 菜单栏行 |
+|-------------------------------------------------------|----------|
+| `five_hour`                                           | Session  |
+| `seven_day`                                           | Weekly   |
+| `seven_day_sonnet`（缺失时回退到 `seven_day_opus`）  | Sonnet   |
 
-The access token is read from the macOS Keychain service `Claude
-Code-credentials` via `/usr/bin/security`, with a file fallback at
-`~/.claude/.credentials.json` and an env override
-`CCBAR_CLAUDE_OAUTH_TOKEN`. Nothing is sent to third-party servers, no
-analytics, no update pings — the one HTTPS call above is the entire network
-surface. Full recovered schema in [`REFERENCE.md`](./REFERENCE.md).
+Access token 从 macOS 钥匙串 service `Claude Code-credentials` 经
+`/usr/bin/security` 读取；回退路径是 `~/.claude/.credentials.json` 文件；
+也可以用环境变量 `CCBAR_CLAUDE_OAUTH_TOKEN` 直接覆盖。ccbar 不向任何第三方
+服务器发数据，没有分析埋点、没有更新检查 —— 网络出口只有上面那一个 HTTPS
+请求。还原出的完整 schema 见 [`REFERENCE.md`](./REFERENCE.md)。
 
-## Not supported
+## 不支持
 
-By design this is a single-purpose tool. Multi-account switching, automatic
-polling timers, local cost estimation from `~/.claude/projects/*.jsonl`, web
-cookie / CLI PTY fallbacks, and Developer ID signing + notarization are all
-out of scope. If you want any of those, upstream [CodexBar] is the
-fuller-featured option.
+ccbar 按单功能工具设计，以下都不做：多账号切换、自动轮询、从
+`~/.claude/projects/*.jsonl` 做本地成本估算、浏览器 cookie / CLI PTY 回退
+路径、Developer ID 签名 + notarization。想要这些，上游的 [CodexBar] 更全。
 
 [CodexBar]: https://github.com/steipete/CodexBar
 
-## Credits
+## 致谢
 
-Data-source logic — endpoint, headers, scope requirements, credential
-locations, window semantics — was reconstructed by reading the Swift source
-of [`steipete/CodexBar`](https://github.com/steipete/CodexBar) (MIT). No
-code was copied; the behavior was re-implemented in Rust. The OAuth surface
-and its quirks would have been much harder to get right without that
-reference.
+取数逻辑（endpoint、header、scope 要求、凭证位置、窗口语义）是通过阅读
+[`steipete/CodexBar`](https://github.com/steipete/CodexBar)（MIT）的 Swift
+源码还原出来的。没有复制代码，用 Rust 重新实现了同样的行为，但如果没有那份
+参考，OAuth 接口和它的各种坑要搞清楚会困难得多。
 
 MIT License.
