@@ -75,6 +75,29 @@ impl RefreshController {
 }
 
 fn main() {
+    // Gatekeeper copies unsigned + quarantined apps into a read-only ephemeral
+    // /private/var/folders/.../AppTranslocation/ path when launched from
+    // outside /Applications; repeated security checks in that sandbox pin a
+    // CPU core at 100%. Bail out with a dialog instead of hanging.
+    if let Ok(exe) = std::env::current_exe() {
+        if exe.to_string_lossy().contains("/AppTranslocation/") {
+            let script = r#"display dialog "ccbar 正在 macOS AppTranslocation 沙盒中运行，会持续占用 100% CPU。
+
+ccbar is running inside macOS AppTranslocation sandbox, which pins CPU at 100%.
+
+修复 / Fix:
+1. 把 ccbar.app 拖到 /Applications  (move to /Applications)
+2. 在终端执行 (run in Terminal):
+   xattr -rd com.apple.quarantine /Applications/ccbar.app
+3. 从启动台重新打开  (relaunch from Launchpad)" with title "ccbar" with icon stop buttons {"OK"} default button 1"#;
+            let _ = std::process::Command::new("osascript")
+                .args(["-e", script])
+                .status();
+            eprintln!("ccbar: refusing to run from AppTranslocation sandbox ({exe:?})");
+            std::process::exit(1);
+        }
+    }
+
     let creds = match credentials::Credentials::load() {
         Ok(c) => {
             let tail: String = c
