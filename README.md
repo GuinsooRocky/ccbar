@@ -40,7 +40,7 @@ Weekly（7 天所有模型累计）、Sonnet/Opus（7 天顶级模型专用）�
 
 ## 安装
 
-> ### **[⬇ ccbar v0.2.1 — 528 KB zip](https://github.com/GuinsooRocky/ccbar/releases/download/v0.2.1/ccbar-v0.2.1-macos.zip)**
+> ### **[⬇ ccbar v0.2.2 — 529 KB zip](https://github.com/GuinsooRocky/ccbar/releases/download/v0.2.2/ccbar-v0.2.2-macos.zip)**
 >
 > macOS 14+（Apple Silicon + Intel）· ad-hoc 签名 · 未做 notarization
 
@@ -75,7 +75,8 @@ Weekly（7 天所有模型累计）、Sonnet/Opus（7 天顶级模型专用）�
 ## 工作原理
 
 只有一个 HTTP 请求，在启动时、每 5 分钟自动触发、以及手动 `Refresh`（⌘R）
-时发出。请求频率远低于浏览器刷 dashboard。
+时发出。请求频率远低于浏览器刷 dashboard。请求跑在后台线程上，刷新结果通过
+GCD 主队列回到主线程更新 UI —— 即使网络卡到 30 秒超时，菜单栏点击也不会卡。
 
 ```
 GET https://api.anthropic.com/api/oauth/usage
