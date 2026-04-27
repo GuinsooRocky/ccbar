@@ -2,6 +2,7 @@ mod credentials;
 mod usage_api;
 
 use std::cell::RefCell;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
@@ -22,6 +23,34 @@ const REPO_URL: &str = "https://github.com/GuinsooRocky/ccbar";
 const REFRESH_INTERVAL_SECS: NSTimeInterval = 300.0;
 
 use usage_api::{UsageSnapshot, WindowState};
+
+// Minimal FFI to libdispatch so a worker thread can hop UI work back to the
+// main run loop after a blocking HTTP fetch — keeps the menu bar responsive
+// even when the network stalls for the full 30 s reqwest timeout.
+mod dispatch {
+    use std::ffi::c_void;
+
+    unsafe extern "C" {
+        static _dispatch_main_q: c_void;
+        fn dispatch_async_f(
+            queue: *const c_void,
+            context: *mut c_void,
+            work: extern "C" fn(*mut c_void),
+        );
+    }
+
+    pub fn on_main<F: FnOnce() + Send + 'static>(f: F) {
+        let boxed: Box<Box<dyn FnOnce() + Send>> = Box::new(Box::new(f));
+        let ctx = Box::into_raw(boxed) as *mut c_void;
+        unsafe { dispatch_async_f(&_dispatch_main_q, ctx, run_boxed) };
+    }
+
+    extern "C" fn run_boxed(ctx: *mut c_void) {
+        let boxed: Box<Box<dyn FnOnce() + Send>> =
+            unsafe { Box::from_raw(ctx as *mut Box<dyn FnOnce() + Send>) };
+        boxed();
+    }
+}
 
 enum MenuState {
     Ok(UsageSnapshot),
@@ -213,14 +242,35 @@ fn fetch_state(token: &str) -> MenuState {
 }
 
 fn refresh_now() {
+    static IN_FLIGHT: AtomicBool = AtomicBool::new(false);
+    if IN_FLIGHT.swap(true, Ordering::AcqRel) {
+        // Previous fetch still pending — skip overlap.
+        return;
+    }
+
+    let token = APP_STATE.with(|cell| cell.borrow().as_ref().map(|s| s.access_token.clone()));
+    let Some(token) = token else {
+        IN_FLIGHT.store(false, Ordering::Release);
+        return;
+    };
+
+    std::thread::spawn(move || {
+        let new_state = fetch_state(&token);
+        dispatch::on_main(move || {
+            apply_state(new_state);
+            IN_FLIGHT.store(false, Ordering::Release);
+        });
+    });
+}
+
+fn apply_state(new_state: MenuState) {
     let Some(mtm) = MainThreadMarker::new() else {
-        eprintln!("ccbar: refresh_now called off main thread — skipping");
+        eprintln!("ccbar: apply_state called off main thread — skipping");
         return;
     };
     APP_STATE.with(|cell| {
         let borrow = cell.borrow();
         let Some(state) = &*borrow else { return };
-        let new_state = fetch_state(&state.access_token);
         update_icon(&state.status_item, mtm, &new_state);
         populate_menu(&state.menu, mtm, &new_state, &state.controller);
     });
