@@ -42,7 +42,7 @@ which cap is about to hit before firing off that big task. See
 
 ## Install
 
-> ### **[⬇ ccbar v0.2.1 — 528 KB zip](https://github.com/GuinsooRocky/ccbar/releases/download/v0.2.1/ccbar-v0.2.1-macos.zip)**
+> ### **[⬇ ccbar v0.2.2 — 529 KB zip](https://github.com/GuinsooRocky/ccbar/releases/download/v0.2.2/ccbar-v0.2.2-macos.zip)**
 >
 > macOS 14+ (Apple Silicon + Intel) · ad-hoc signed · no notarization
 
@@ -81,6 +81,9 @@ Building from source: `cargo build --release && ./packaging/bundle.sh release`.
 
 One HTTP call, fired on launch, every 5 minutes automatically, and on manual
 `Refresh` (⌘R). Request volume stays well below a browser dashboard refresh.
+The request runs on a worker thread and the result is dispatched back to the
+main run loop via GCD, so the menu bar stays clickable even when the network
+stalls all the way to the 30 s timeout.
 
 ```
 GET https://api.anthropic.com/api/oauth/usage
