@@ -58,6 +58,7 @@ enum MenuState {
 }
 
 struct AppState {
+    access_token: String,
     menu: Retained<NSMenu>,
     controller: Retained<RefreshController>,
     status_item: Retained<NSStatusItem>,
@@ -178,6 +179,7 @@ ccbar is running inside macOS AppTranslocation sandbox, which pins CPU at 100%.
 
     APP_STATE.with(|cell| {
         *cell.borrow_mut() = Some(AppState {
+            access_token: creds.access_token.clone(),
             menu: menu.clone(),
             controller: controller.clone(),
             status_item: status_item.clone(),
@@ -257,23 +259,30 @@ fn refresh_now() {
         return;
     }
 
+    let token = APP_STATE.with(|cell| cell.borrow().as_ref().map(|s| s.access_token.clone()));
+    let Some(token) = token else {
+        IN_FLIGHT.store(false, Ordering::Release);
+        return;
+    };
+
     std::thread::spawn(move || {
-        // Re-read credentials on every refresh so we pick up token rotations
-        // that Claude Code may have written to the keychain while we were running.
-        let token = match credentials::Credentials::load() {
-            Ok(c) => c.access_token,
-            Err(e) => {
-                let msg = format!("credentials: {e}");
+        let mut state = fetch_state(&token);
+        // On 401 the OAuth token may have rotated — reload once from keychain.
+        if matches!(state, MenuState::Error(ref m) if m.contains("token expired")) {
+            if let Ok(fresh) = credentials::Credentials::load() {
+                state = fetch_state(&fresh.access_token);
+                let new_token = fresh.access_token.clone();
                 dispatch::on_main(move || {
-                    apply_state(MenuState::Error(msg));
-                    IN_FLIGHT.store(false, Ordering::Release);
+                    APP_STATE.with(|cell| {
+                        if let Some(s) = cell.borrow_mut().as_mut() {
+                            s.access_token = new_token;
+                        }
+                    });
                 });
-                return;
             }
-        };
-        let new_state = fetch_state(&token);
+        }
         dispatch::on_main(move || {
-            apply_state(new_state);
+            apply_state(state);
             IN_FLIGHT.store(false, Ordering::Release);
         });
     });
