@@ -42,7 +42,7 @@ which cap is about to hit before firing off that big task. See
 
 ## Install
 
-> ### **[⬇ ccbar v0.2.5 — 988 KB zip](https://github.com/GuinsooRocky/ccbar/releases/download/v0.2.5/ccbar-v0.2.5-macos.zip)**
+> ### **[⬇ ccbar v0.2.6 — 988 KB zip](https://github.com/GuinsooRocky/ccbar/releases/download/v0.2.6/ccbar-v0.2.6-macos.zip)**
 >
 > macOS 14+ (Apple Silicon + Intel) · ad-hoc signed · no notarization
 

@@ -78,6 +78,23 @@ define_class!(
         #[unsafe(method(handleRefresh:))]
         fn handle_refresh(&self, _sender: *mut AnyObject) {
             refresh_now();
+            // Reopen the menu on the next run-loop pass so the user can watch
+            // the data update in place after a manual ⌘R press.
+            dispatch::on_main(|| {
+                APP_STATE.with(|cell| {
+                    let borrow = cell.borrow();
+                    let Some(state) = borrow.as_ref() else { return };
+                    let Some(mtm) = MainThreadMarker::new() else { return };
+                    let Some(btn) = state.status_item.button(mtm) else { return };
+                    unsafe { let _: () = msg_send![&*btn, performClick: std::ptr::null_mut::<AnyObject>()]; }
+                });
+            });
+        }
+
+        // Used by NSTimer — refreshes data silently without reopening the menu.
+        #[unsafe(method(handleTimerRefresh:))]
+        fn handle_timer_refresh(&self, _sender: *mut AnyObject) {
+            refresh_now();
         }
 
         #[unsafe(method(openRepo:))]
@@ -183,7 +200,7 @@ ccbar is running inside macOS AppTranslocation sandbox, which pins CPU at 100%.
         NSTimer::scheduledTimerWithTimeInterval_target_selector_userInfo_repeats(
             REFRESH_INTERVAL_SECS,
             &*controller,
-            sel!(handleRefresh:),
+            sel!(handleTimerRefresh:),
             None,
             true,
         );
