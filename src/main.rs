@@ -58,7 +58,6 @@ enum MenuState {
 }
 
 struct AppState {
-    access_token: String,
     menu: Retained<NSMenu>,
     controller: Retained<RefreshController>,
     status_item: Retained<NSStatusItem>,
@@ -78,6 +77,17 @@ define_class!(
         #[unsafe(method(handleRefresh:))]
         fn handle_refresh(&self, _sender: *mut AnyObject) {
             refresh_now();
+            // NSMenu closes itself after the action returns. Reopen on the next
+            // run-loop pass so the user can watch the data update in place.
+            dispatch::on_main(|| {
+                APP_STATE.with(|cell| {
+                    let borrow = cell.borrow();
+                    let Some(state) = borrow.as_ref() else { return };
+                    let Some(mtm) = MainThreadMarker::new() else { return };
+                    let Some(btn) = state.status_item.button(mtm) else { return };
+                    unsafe { let _: () = msg_send![&*btn, performClick: std::ptr::null_mut::<AnyObject>()]; }
+                });
+            });
         }
 
         #[unsafe(method(openRepo:))]
@@ -168,7 +178,6 @@ ccbar is running inside macOS AppTranslocation sandbox, which pins CPU at 100%.
 
     APP_STATE.with(|cell| {
         *cell.borrow_mut() = Some(AppState {
-            access_token: creds.access_token.clone(),
             menu: menu.clone(),
             controller: controller.clone(),
             status_item: status_item.clone(),
@@ -248,13 +257,20 @@ fn refresh_now() {
         return;
     }
 
-    let token = APP_STATE.with(|cell| cell.borrow().as_ref().map(|s| s.access_token.clone()));
-    let Some(token) = token else {
-        IN_FLIGHT.store(false, Ordering::Release);
-        return;
-    };
-
     std::thread::spawn(move || {
+        // Re-read credentials on every refresh so we pick up token rotations
+        // that Claude Code may have written to the keychain while we were running.
+        let token = match credentials::Credentials::load() {
+            Ok(c) => c.access_token,
+            Err(e) => {
+                let msg = format!("credentials: {e}");
+                dispatch::on_main(move || {
+                    apply_state(MenuState::Error(msg));
+                    IN_FLIGHT.store(false, Ordering::Release);
+                });
+                return;
+            }
+        };
         let new_state = fetch_state(&token);
         dispatch::on_main(move || {
             apply_state(new_state);

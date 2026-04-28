@@ -14,7 +14,6 @@
 //!
 //! The beta header `anthropic-beta: oauth-2025-04-20` is currently required.
 
-use std::sync::OnceLock;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
@@ -68,21 +67,15 @@ impl WindowState {
     }
 }
 
-// Reuse a single client across refreshes — preserves the TLS context, DNS
-// cache, and HTTP keep-alive pool across the 5-minute polling cycle instead of
-// rebuilding them on every call.
-fn client() -> &'static reqwest::blocking::Client {
-    static CLIENT: OnceLock<reqwest::blocking::Client> = OnceLock::new();
-    CLIENT.get_or_init(|| {
-        reqwest::blocking::Client::builder()
-            .timeout(TIMEOUT)
-            .build()
-            .expect("reqwest blocking client must build")
-    })
-}
-
 pub fn fetch_usage(access_token: &str) -> Result<UsageSnapshot, UsageError> {
-    let response = client()
+    // Build a fresh client each call: after system sleep the OS closes all TCP
+    // connections, so a pooled client would hand out dead sockets on wake.
+    // At 5-minute intervals the rebuild cost is negligible.
+    let client = reqwest::blocking::Client::builder()
+        .timeout(TIMEOUT)
+        .build()
+        .expect("reqwest blocking client must build");
+    let response = client
         .get(USAGE_URL)
         .bearer_auth(access_token)
         .header("anthropic-beta", BETA_HEADER)
