@@ -40,7 +40,7 @@ Weekly（7 天所有模型累计）、Sonnet/Opus（7 天顶级模型专用）�
 
 ## 安装
 
-> ### **[⬇ ccbar v0.2.7 — 988 KB zip](https://github.com/GuinsooRocky/ccbar/releases/download/v0.2.7/ccbar-v0.2.7-macos.zip)**
+> ### **[⬇ ccbar v0.2.8 — 253 KB zip](https://github.com/GuinsooRocky/ccbar/releases/download/v0.2.8/ccbar-v0.2.8-macos.zip)**
 >
 > macOS 14+（Apple Silicon + Intel）· ad-hoc 签名 · 未做 notarization
 
