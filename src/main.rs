@@ -26,7 +26,7 @@ use usage_api::{UsageSnapshot, WindowState};
 
 // Minimal FFI to libdispatch so a worker thread can hop UI work back to the
 // main run loop after a blocking HTTP fetch — keeps the menu bar responsive
-// even when the network stalls for the full 30 s reqwest timeout.
+// even when the network stalls for the full 30 s timeout.
 mod dispatch {
     use std::ffi::c_void;
 

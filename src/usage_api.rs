@@ -1,39 +1,31 @@
-//! Anthropic OAuth usage API client.
-//!
-//! Endpoint: `GET https://api.anthropic.com/api/oauth/usage`
-//! Response shape (fields we care about):
-//!
-//! ```json
-//! {
-//!   "five_hour":        { "utilization": 0.59, "resets_at": "2026-04-24T02:00:00Z" },
-//!   "seven_day":        { "utilization": 0.82, "resets_at": "..." },
-//!   "seven_day_sonnet": { "utilization": 0.09, "resets_at": "..." },
-//!   "seven_day_opus":   { ... }
-//! }
-//! ```
-//!
-//! The beta header `anthropic-beta: oauth-2025-04-20` is currently required.
-
+use std::sync::mpsc;
 use std::time::Duration;
 
+use block2::RcBlock;
 use chrono::{DateTime, Utc};
+use objc2::msg_send;
+use objc2_foundation::{
+    NSData, NSError, NSHTTPURLResponse, NSMutableURLRequest, NSString, NSURL,
+    NSURLRequestCachePolicy, NSURLResponse, NSURLSession,
+};
 use serde::Deserialize;
 
 const USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
 const BETA_HEADER: &str = "oauth-2025-04-20";
 const USER_AGENT: &str = "claude-code/2.1.0";
-const TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug, thiserror::Error)]
 pub enum UsageError {
-    #[error("http transport failed: {0}")]
-    Http(#[from] reqwest::Error),
+    #[error("network error: {0}")]
+    Network(String),
     #[error("unauthorized (HTTP 401) — token expired or revoked; run `claude` to refresh")]
     Unauthorized,
     #[error("forbidden (HTTP 403) — token likely missing 'user:profile' scope: {0}")]
     Forbidden(String),
     #[error("server returned HTTP {0}: {1}")]
     Status(u16, String),
+    #[error("JSON parse failed: {0}")]
+    Json(#[from] serde_json::Error),
     #[error("response missing 'five_hour' window")]
     MissingSession,
 }
@@ -48,7 +40,6 @@ pub struct UsageSnapshot {
 
 #[derive(Debug, Clone)]
 pub struct WindowState {
-    /// 0.0 = unused, 1.0 = fully consumed.
     pub fraction_used: f64,
     pub resets_at: Option<DateTime<Utc>>,
 }
@@ -68,38 +59,81 @@ impl WindowState {
 }
 
 pub fn fetch_usage(access_token: &str) -> Result<UsageSnapshot, UsageError> {
-    // Build a fresh client each call: after system sleep the OS closes all TCP
-    // connections, so a pooled client would hand out dead sockets on wake.
-    // At 5-minute intervals the rebuild cost is negligible.
-    let client = reqwest::blocking::Client::builder()
-        .timeout(TIMEOUT)
-        .build()
-        .expect("reqwest blocking client must build");
-    let response = client
-        .get(USAGE_URL)
-        .bearer_auth(access_token)
-        .header("anthropic-beta", BETA_HEADER)
-        .header("accept", "application/json")
-        .header("content-type", "application/json")
-        .header("user-agent", USER_AGENT)
-        .send()?;
+    let (tx, rx) = mpsc::channel::<Result<String, UsageError>>();
 
-    let status = response.status();
-    let status_code = status.as_u16();
-    match status_code {
-        200 => {}
-        401 => return Err(UsageError::Unauthorized),
-        403 => {
-            let body = response.text().unwrap_or_default();
-            return Err(UsageError::Forbidden(snippet(&body, 300)));
-        }
-        _ => {
-            let body = response.text().unwrap_or_default();
-            return Err(UsageError::Status(status_code, snippet(&body, 300)));
+    let url = unsafe {
+        NSURL::URLWithString(&NSString::from_str(USAGE_URL))
+    }
+    .ok_or_else(|| UsageError::Network("invalid URL".into()))?;
+
+    let request = unsafe { NSMutableURLRequest::new() };
+    unsafe {
+        request.setURL(Some(&url));
+        request.setTimeoutInterval(30.0);
+        request.setCachePolicy(NSURLRequestCachePolicy::ReloadIgnoringLocalCacheData);
+        let auth = format!("Bearer {access_token}");
+        for (k, v) in [
+            ("Authorization", auth.as_str()),
+            ("anthropic-beta", BETA_HEADER),
+            ("accept", "application/json"),
+            ("content-type", "application/json"),
+            ("user-agent", USER_AGENT),
+        ] {
+            request.setValue_forHTTPHeaderField(
+                Some(&NSString::from_str(v)),
+                &NSString::from_str(k),
+            );
         }
     }
 
-    let payload: UsageResponse = response.json()?;
+    let block = RcBlock::new(
+        move |data: *mut NSData, response: *mut NSURLResponse, error: *mut NSError| {
+            let result = unsafe {
+                if !error.is_null() {
+                    let desc = (*error).localizedDescription();
+                    Err(UsageError::Network(desc.to_string()))
+                } else if data.is_null() {
+                    Err(UsageError::Network("empty response".into()))
+                } else {
+                    let status: isize = if response.is_null() {
+                        200
+                    } else {
+                        let http = &*(response as *const NSHTTPURLResponse);
+                        http.statusCode()
+                    };
+                    let bytes: *const u8 = msg_send![&*data, bytes];
+                    let len = (*data).length() as usize;
+                    let body =
+                        std::str::from_utf8(std::slice::from_raw_parts(bytes, len))
+                            .unwrap_or("")
+                            .to_string();
+                    match status as u16 {
+                        200 => Ok(body),
+                        401 => Err(UsageError::Unauthorized),
+                        403 => Err(UsageError::Forbidden(snippet(&body, 300))),
+                        s => Err(UsageError::Status(s, snippet(&body, 300))),
+                    }
+                }
+            };
+            tx.send(result).ok();
+        },
+    );
+
+    unsafe {
+        let session = NSURLSession::sharedSession();
+        let task = session.dataTaskWithRequest_completionHandler(&request, &block);
+        task.resume();
+    }
+
+    match rx.recv_timeout(Duration::from_secs(35)) {
+        Ok(Ok(body)) => parse_body(&body),
+        Ok(Err(e)) => Err(e),
+        Err(_) => Err(UsageError::Network("request timed out".into())),
+    }
+}
+
+fn parse_body(body: &str) -> Result<UsageSnapshot, UsageError> {
+    let payload: UsageResponse = serde_json::from_str(body)?;
     let session = payload
         .five_hour
         .and_then(WindowPayload::into_state)
@@ -109,7 +143,6 @@ pub fn fetch_usage(access_token: &str) -> Result<UsageSnapshot, UsageError> {
         .seven_day_sonnet
         .and_then(WindowPayload::into_state)
         .or_else(|| payload.seven_day_opus.and_then(WindowPayload::into_state));
-
     Ok(UsageSnapshot {
         session,
         weekly,
@@ -134,7 +167,6 @@ struct WindowPayload {
 
 impl WindowPayload {
     fn into_state(self) -> Option<WindowState> {
-        // API returns `utilization` as a 0–100 percent, not a 0–1 fraction.
         let fraction = self.utilization? / 100.0;
         let resets_at = self
             .resets_at
