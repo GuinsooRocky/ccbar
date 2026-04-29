@@ -1,6 +1,6 @@
 [package]
 name = "ccbar"
-version = "0.2.7"
+version = "0.2.8"
 edition = "2024"
 
 [profile.release]
@@ -13,10 +13,10 @@ panic = "abort"
 [dependencies]
 chrono = { version = "0.4.44", default-features = false, features = ["clock", "std", "serde"] }
 dirs = "6.0.0"
+block2 = "0.6.2"
 objc2 = "0.6.4"
 objc2-app-kit = "0.3.2"
-objc2-foundation = "0.3.2"
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+objc2-foundation = { version = "0.3.2", features = ["NSData", "NSError", "NSURLRequest", "NSURLResponse", "NSURLSession", "block2"] }
 security-framework = "3.7.0"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
