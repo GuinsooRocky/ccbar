@@ -77,7 +77,7 @@ define_class!(
     impl RefreshController {
         #[unsafe(method(handleRefresh:))]
         fn handle_refresh(&self, _sender: *mut AnyObject) {
-            refresh_now();
+            refresh_now(true);
             // Reopen the menu on the next run-loop pass so the user can watch
             // the data update in place after a manual ⌘R press.
             dispatch::on_main(|| {
@@ -94,7 +94,7 @@ define_class!(
         // Used by NSTimer — refreshes data silently without reopening the menu.
         #[unsafe(method(handleTimerRefresh:))]
         fn handle_timer_refresh(&self, _sender: *mut AnyObject) {
-            refresh_now();
+            refresh_now(false);
         }
 
         #[unsafe(method(openRepo:))]
@@ -258,7 +258,7 @@ fn fetch_state(token: &str) -> MenuState {
     }
 }
 
-fn refresh_now() {
+fn refresh_now(manual: bool) {
     static IN_FLIGHT: AtomicBool = AtomicBool::new(false);
     if IN_FLIGHT.swap(true, Ordering::AcqRel) {
         // Previous fetch still pending — skip overlap.
@@ -288,7 +288,12 @@ fn refresh_now() {
             }
         }
         dispatch::on_main(move || {
-            apply_state(state);
+            // Timer-triggered failures are silent — keep last good data.
+            if !manual && matches!(state, MenuState::Error(_)) {
+                eprintln!("ccbar: timer refresh failed, keeping last state");
+            } else {
+                apply_state(state);
+            }
             IN_FLIGHT.store(false, Ordering::Release);
         });
     });
