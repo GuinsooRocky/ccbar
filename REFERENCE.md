@@ -1,14 +1,15 @@
 # ccbar — Claude quota data source reference
 
-Distilled from `steipete/CodexBar` (MIT). Only the subset needed for the "Claude
-title + Session + Weekly + Sonnet + Quit" menu.
+Distilled from `steipete/CodexBar` (MIT), then re-verified against the live
+endpoint on 2026-07-13. Only the subset needed for the "Claude title + Session +
+Weekly + premium-model + Quit" menu.
 
 ## Scope for ccbar
 
 - Data source: **OAuth API only**. No Web cookie, no CLI PTY, no local JSONL
   cost scan.
-- Menu surface: Claude title, Session (five_hour), Weekly (seven_day),
-  Sonnet (seven_day_sonnet), Quit.
+- Menu surface: Claude title, Session, Weekly, the current premium model's
+  window (name read from the response, not hardcoded), Quit.
 - Everything below that CodexBar does beyond this (Web fallback, CLI fallback,
   extra_usage, multi-account, watchdog process) is intentionally out of scope.
 
@@ -29,16 +30,40 @@ title + Session + Weekly + Sonnet + Quit" menu.
 
 ```
 {
-  "five_hour":         { "utilization": 0.59, "resets_at": "2026-04-24T02:00:00Z" },
-  "seven_day":         { "utilization": 0.82, "resets_at": "..." },
-  "seven_day_sonnet":  { "utilization": 0.09, "resets_at": "..." },
-  "seven_day_opus":    { "utilization": ..., "resets_at": ... },
+  "five_hour":         { "utilization": 98.0, "resets_at": "2026-07-13T08:50:00Z" },
+  "seven_day":         { "utilization": 22.0, "resets_at": "2026-07-18T22:00:00Z" },
+
+  // Per-model top-level keys. All null as of 2026-07 — superseded by `limits`.
+  // Anthropic also ships unreleased codenames here (seven_day_cowork,
+  // seven_day_omelette, tangelo, iguana_necktie, nimbus_quill, cinder_cove,
+  // amber_ladder …). Do not chase these; read `limits` instead.
+  "seven_day_sonnet":  null,
+  "seven_day_opus":    null,
+
+  // Current shape: self-describing, one entry per active limit.
+  "limits": [
+    { "kind": "session",       "group": "session", "percent": 98, "severity": "critical",
+      "resets_at": "2026-07-13T08:50:00Z", "scope": null, "is_active": true },
+    { "kind": "weekly_all",    "group": "weekly",  "percent": 22, "severity": "normal",
+      "resets_at": "2026-07-18T22:00:00Z", "scope": null, "is_active": false },
+    { "kind": "weekly_scoped", "group": "weekly",  "percent": 15, "severity": "normal",
+      "resets_at": "2026-07-18T22:00:00Z", "is_active": false,
+      "scope": { "model": { "id": null, "display_name": "Fable" }, "surface": null } }
+  ],
+
   "extra_usage":       { "is_enabled": true, "monthly_limit": 2000, "used_credits": 0, "currency": "USD" }
 }
 ```
 
-- `utilization` = fraction used, 0..1. UI shows `100 - utilization*100` as
-  "% left".
+- **`limits` is the field to read.** Each entry names its own window via `kind`,
+  and the premium-model entry carries the model's `display_name`. Because the
+  name travels with the data, rotating the premium model (Opus → Sonnet → Fable →
+  …) needs no ccbar release. Hardcoding model field names does not survive.
+- `percent` (in `limits`) and `utilization` (top-level) are both **used**
+  percentages on a 0..100 scale, not a 0..1 fraction. UI shows `100 - percent`
+  as "% left".
+- `severity` (`normal` / `critical`) and `is_active` are carried but unused by
+  ccbar today.
 - `resets_at` = ISO-8601 UTC. Parse with `chrono::DateTime<Utc>`. For the
   session bar CodexBar displays the wall-clock time in the token's timezone
   (e.g. "Resets 2am (Asia/Tokyo)"). MVP can just format in local time.
@@ -47,11 +72,15 @@ title + Session + Weekly + Sonnet + Quit" menu.
 
 ### Field mapping to menu
 
-| Menu row  | JSON field          |
-|-----------|---------------------|
-| Session   | `five_hour`         |
-| Weekly    | `seven_day`         |
-| Sonnet    | `seven_day_sonnet`  (fall back to `seven_day_opus` if missing) |
+| Menu row                    | JSON source                                  |
+|-----------------------------|----------------------------------------------|
+| Session                     | `limits[]` where `kind == "session"`         |
+| Weekly                      | `limits[]` where `kind == "weekly_all"`      |
+| *(model's `display_name`)*  | the `limits[]` entry carrying `scope.model`  |
+
+Fallback for responses served without `limits` (older accounts): `five_hour`,
+`seven_day`, and `seven_day_sonnet ?? seven_day_opus` (labelled "Sonnet"/"Opus").
+The row is hidden entirely when no scoped window exists in either shape.
 
 ## Credentials
 
@@ -152,13 +181,16 @@ hitting zero throttles you. They're independent ceilings, not a single budget.
 - When Weekly empties you're rate-limited for a week (minus reserve
   spend-down), even if Session is full.
 
-### Sonnet / Opus — `seven_day_sonnet` / `seven_day_opus`
+### Premium model — `limits[]` with `kind == "weekly_scoped"`
 
-- 7-day window specifically for the premium model tier.
-- Anthropic carves this out so a Max user cannot burn an entire week on Opus.
-- The API returns **at most one** of `seven_day_sonnet` / `seven_day_opus`
-  depending on what the account is weighted to. Parse with:
-  `seven_day_sonnet ?? seven_day_opus`.
+- 7-day window specifically for the current premium model tier.
+- Anthropic carves this out so a Max user cannot burn an entire week on the
+  top model.
+- The model rotates (Opus → Sonnet → Fable as of 2026-07). Its name is in
+  `scope.model.display_name`; render that rather than a compiled-in string.
+- Historically this came through the top-level `seven_day_sonnet` /
+  `seven_day_opus` keys, of which at most one was populated. Those are null
+  now — keep them only as a fallback.
 - When this empties you can still use **Haiku** — it doesn't charge against
   this bar, only against Session + Weekly (all models).
 
@@ -168,13 +200,14 @@ hitting zero throttles you. They're independent ceilings, not a single budget.
 |---|---|---|
 | Session | Rate-limited for the remainder of the 5h window | Wait |
 | Weekly (all models) | Rate-limited for the rest of the 7d (reserve may cover briefly) | Wait, or switch account |
-| Sonnet/Opus | Premium model blocked, everything else still works | Downgrade to Haiku |
+| Premium model | That model blocked, everything else still works | Downgrade to Haiku |
 
 ### What ccbar displays from these
 
-- Menu row "Session"  ← `five_hour.utilization`
-- Menu row "Weekly"   ← `seven_day.utilization`
-- Menu row "Sonnet"   ← `seven_day_sonnet.utilization ?? seven_day_opus.utilization`
+- Menu row "Session" ← the `session` entry in `limits`
+- Menu row "Weekly"  ← the `weekly_all` entry in `limits`
+- Menu row named after the model (e.g. "Fable") ← the `limits` entry with
+  `scope.model`, labelled with its `display_name`
 - Reset countdowns: parse ISO-8601 `resets_at`, diff against `now`,
   render as "Resets in Xh Ym" or "Resets Xam (tz)" for same-day absolute
   anchors.

@@ -3,7 +3,7 @@
 # ccbar
 
 A tiny macOS 14+ menu bar app that surfaces your **Claude Code** usage
-quotas (Session / Weekly / Sonnet) right in the menu bar.
+quotas (Session / Weekly / current premium model) right in the menu bar.
 
 - **For Claude Code users** on a Pro / Max / Team / Enterprise subscription.
   If `claude` is your daily driver, ccbar shows the three rate-limit windows
@@ -23,7 +23,7 @@ quotas (Session / Weekly / Sonnet) right in the menu bar.
  │ ─────────────────────────────────────── │
  │  Weekly     ██████░░      97%  1d 18h   │
  │ ─────────────────────────────────────── │
- │  Sonnet     ████████      100%          │
+ │  Fable      ████████      100%          │
  │ ─────────────────────────────────────── │
  │  Refresh                           ⌘R   │
  │  Open on GitHub                         │
@@ -35,10 +35,16 @@ The status bar icon is a two-bar meter (top = 5-hour Session, bottom = 7-day
 Weekly), template-mode so it auto-inverts for light/dark menu bars.
 
 Anthropic caps each Claude account with three independent windows — Session
-(5h rolling), Weekly (7d all-models), and Sonnet/Opus (7d premium) — and any
-one hitting zero throttles you. ccbar keeps all three visible so you see
-which cap is about to hit before firing off that big task. See
-[`REFERENCE.md`](./REFERENCE.md) for the full window semantics.
+(5h rolling), Weekly (7d all-models), and a 7-day window carved out for the
+current premium model — and any one hitting zero throttles you. ccbar keeps all
+three visible so you see which cap is about to hit before firing off that big
+task.
+
+The model name on the third row (Fable in the screenshot) is not compiled in.
+It is read from `limits[].scope.model.display_name` in the API response, so when
+Anthropic rotates the premium model — as it does every few months — ccbar follows
+the server without needing a release. See [`REFERENCE.md`](./REFERENCE.md) for
+the full window semantics.
 
 ## Install
 
@@ -73,7 +79,7 @@ which cap is about to hit before firing off that big task. See
 subscription, and the `claude` CLI already signed in on this machine so the
 Keychain holds a token with the `user:profile` scope (modern `claude login`
 produces this by default; if ccbar complains, run `claude setup-token`).
-API-key-only accounts have no session/weekly/sonnet quotas to show.
+API-key-only accounts have no session/weekly/premium quotas to show.
 
 Building from source: `cargo build --release && ./packaging/bundle.sh release`.
 
@@ -94,9 +100,13 @@ GET https://api.anthropic.com/api/oauth/usage
 
 | Response field                                      | Menu row |
 |-----------------------------------------------------|----------|
-| `five_hour`                                         | Session  |
-| `seven_day`                                         | Weekly   |
-| `seven_day_sonnet` (falls back to `seven_day_opus`) | Sonnet   |
+| `limits[]` where `kind = "session"`                 | Session  |
+| `limits[]` where `kind = "weekly_all"`              | Weekly   |
+| the `limits[]` entry carrying `scope.model`         | that model's `display_name` (e.g. Fable) |
+
+The `limits` array is self-describing — the model name ships with the data. If an
+account is served a response without it, ccbar falls back to the older top-level
+`five_hour` / `seven_day` / `seven_day_sonnet` / `seven_day_opus` keys.
 
 The access token is read from the macOS Keychain service `Claude
 Code-credentials` via `/usr/bin/security`, with a file fallback at

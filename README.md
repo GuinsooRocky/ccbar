@@ -3,7 +3,7 @@
 # ccbar
 
 一个小巧的 macOS 14+ 菜单栏 App，把你的 **Claude Code** 用量配额
-（Session / Weekly / Sonnet）直接显示在菜单栏上。
+（Session / Weekly / 当前顶级模型）直接显示在菜单栏上。
 
 - **面向 Claude Code 用户** — 订阅了 Pro / Max / Team / Enterprise 套餐、
   日常用 `claude` CLI 的人，ccbar 会把限制你账号的三个 rate-limit 窗口
@@ -22,7 +22,7 @@
  │ ─────────────────────────────────────── │
  │  Weekly     ██████░░      97%  1d 18h   │
  │ ─────────────────────────────────────── │
- │  Sonnet     ████████      100%          │
+ │  Fable      ████████      100%          │
  │ ─────────────────────────────────────── │
  │  Refresh                           ⌘R   │
  │  Open on GitHub                         │
@@ -34,9 +34,13 @@
 template 模式下会根据菜单栏深/浅色自动反色。
 
 Anthropic 对每个 Claude 账号设三个独立的配额窗口 —— Session（5 小时滚动）、
-Weekly（7 天所有模型累计）、Sonnet/Opus（7 天顶级模型专用）—— 任何一个见底
-都会让你被限流。ccbar 把三个窗口同时显示，让你在跑大任务前先知道哪条最紧。
-窗口语义详见 [`REFERENCE.md`](./REFERENCE.md)（英文）。
+Weekly（7 天所有模型累计）、以及一个给当前顶级模型单开的 7 天窗口 —— 任何一个
+见底都会让你被限流。ccbar 把三个窗口同时显示，让你在跑大任务前先知道哪条最紧。
+
+第三行的模型名（截图里是 Fable）不是写死的，而是从 API 的
+`limits[].scope.model.display_name` 现读的：Anthropic 隔几个月换一次顶级模型，
+ccbar 跟着服务端返回的名字走，不用发新版本。窗口语义详见
+[`REFERENCE.md`](./REFERENCE.md)（英文）。
 
 ## 安装
 
@@ -87,9 +91,12 @@ GET https://api.anthropic.com/api/oauth/usage
 
 | 响应字段                                                | 菜单栏行 |
 |-------------------------------------------------------|----------|
-| `five_hour`                                           | Session  |
-| `seven_day`                                           | Weekly   |
-| `seven_day_sonnet`（缺失时回退到 `seven_day_opus`）  | Sonnet   |
+| `limits[]`，`kind = "session"`                        | Session  |
+| `limits[]`，`kind = "weekly_all"`                     | Weekly   |
+| `limits[]` 中带 `scope.model` 的那条                  | 该模型的 `display_name`（如 Fable） |
+
+`limits` 数组是自描述的，模型名随数据下发。老账号若拿不到 `limits`，会回退到
+早期的顶层字段 `five_hour` / `seven_day` / `seven_day_sonnet` / `seven_day_opus`。
 
 Access token 从 macOS 钥匙串 service `Claude Code-credentials` 经
 `/usr/bin/security` 读取；回退路径是 `~/.claude/.credentials.json` 文件；

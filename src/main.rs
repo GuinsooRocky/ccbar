@@ -232,16 +232,20 @@ fn fetch_state(token: &str) -> MenuState {
     match usage_api::fetch_usage(token) {
         Ok(snap) => {
             eprintln!(
-                "ccbar: usage ok — session={:.0}% used, weekly={}, sonnet={}",
+                "ccbar: usage ok — session={:.0}% used, weekly={}, {}",
                 snap.session.fraction_used * 100.0,
                 snap.weekly
                     .as_ref()
                     .map(|w| format!("{:.0}%", w.fraction_used * 100.0))
                     .unwrap_or_else(|| "n/a".into()),
-                snap.sonnet
+                snap.scoped
                     .as_ref()
-                    .map(|w| format!("{:.0}%", w.fraction_used * 100.0))
-                    .unwrap_or_else(|| "n/a".into()),
+                    .map(|s| format!(
+                        "{}={:.0}%",
+                        s.label.to_lowercase(),
+                        s.state.fraction_used * 100.0
+                    ))
+                    .unwrap_or_else(|| "scoped=n/a".into()),
             );
             MenuState::Ok(snap)
         }
@@ -333,8 +337,10 @@ fn populate_menu(
             add_window_section(menu, mtm, "Weekly", snap.weekly.as_ref());
             menu.addItem(&NSMenuItem::separatorItem(mtm));
 
-            add_window_section(menu, mtm, "Sonnet", snap.sonnet.as_ref());
-            menu.addItem(&NSMenuItem::separatorItem(mtm));
+            if let Some(scoped) = &snap.scoped {
+                add_window_section(menu, mtm, &scoped.label, Some(&scoped.state));
+                menu.addItem(&NSMenuItem::separatorItem(mtm));
+            }
         }
         MenuState::Error(msg) => {
             add_label(menu, mtm, "Claude  error");
