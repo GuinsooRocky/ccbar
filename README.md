@@ -44,7 +44,7 @@ ccbar 跟着服务端返回的名字走，不用发新版本。窗口语义详�
 
 ## 安装
 
-> ### **[⬇ ccbar v0.2.8 — 253 KB zip](https://github.com/GuinsooRocky/ccbar/releases/download/v0.2.8/ccbar-v0.2.8-macos.zip)**
+> ### **[⬇ ccbar v0.2.9 — 259 KB zip](https://github.com/GuinsooRocky/ccbar/releases/download/v0.2.9/ccbar-v0.2.9-macos.zip)**
 >
 > macOS 14+（Apple Silicon + Intel）· ad-hoc 签名 · 未做 notarization
 

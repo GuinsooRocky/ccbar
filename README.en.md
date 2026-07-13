@@ -48,7 +48,7 @@ the full window semantics.
 
 ## Install
 
-> ### **[⬇ ccbar v0.2.8 — 253 KB zip](https://github.com/GuinsooRocky/ccbar/releases/download/v0.2.8/ccbar-v0.2.8-macos.zip)**
+> ### **[⬇ ccbar v0.2.9 — 259 KB zip](https://github.com/GuinsooRocky/ccbar/releases/download/v0.2.9/ccbar-v0.2.9-macos.zip)**
 >
 > macOS 14+ (Apple Silicon + Intel) · ad-hoc signed · no notarization
 
