@@ -6,7 +6,7 @@
 用量配额直接显示在菜单栏上。
 
 - **同时看 Claude 与 Codex** — Claude 展示 Session / Weekly / 当前顶级模型；
-  Codex 按服务端实际返回展示 5 小时、7 天和模型专属窗口，不把窗口类型写死。
+  Codex 只展示所有主力模型共用的 7 天 Weekly 额度，不显示模型专属窗口。
   当前未运行的服务会在 1 分钟内整块隐藏；任一服务请求失败时，另一边仍可正常显示。
 - **体积极小**：1.0 MB 安装包，空闲约 45 MB 常驻内存、接近 0 % CPU
   （每 5 分钟自动刷新一次，也可按 ⌘R 手动刷新）。Rust + AppKit
@@ -28,17 +28,14 @@
  │ ─────────────────────────────────────── │
  │  Weekly     ██░░░░░░      97%  6d 12h   │
  │ ─────────────────────────────────────── │
- │  Spark      ░░░░░░░░      100%  7d 0h   │
- │ ─────────────────────────────────────── │
  │  Refresh                           ⌘R   │
  │  Open on GitHub                         │
  │  Quit                              ⌘Q   │
  └─────────────────────────────────────────┘
 ```
 
-菜单栏图标最多只显示两条 meter：Claude 当前 5 小时 Session，以及 Codex 当前
-主窗口（优先 5 小时；套餐未返回 5 小时时使用服务端主窗口）。Weekly、模型专属
-额度和重置时间只在点开菜单后展示。template 模式会根据菜单栏深/浅色自动反色。
+菜单栏图标最多只显示两条 meter：Claude 当前 5 小时 Session，以及 Codex
+Weekly 额度。重置时间在点开菜单后展示。template 模式会根据菜单栏深/浅色自动反色。
 
 Anthropic 对每个 Claude 账号设三个独立的配额窗口 —— Session（5 小时滚动）、
 Weekly（7 天所有模型累计）、以及一个给当前顶级模型单开的 7 天窗口 —— 任何一个
@@ -49,9 +46,9 @@ Weekly（7 天所有模型累计）、以及一个给当前顶级模型单开的
 ccbar 跟着服务端返回的名字走，不用发新版本。窗口语义详见
 [`REFERENCE.md`](./REFERENCE.md)（英文）。
 
-Codex 同样使用服务端自描述数据。不同套餐不一定同时返回 5 小时和 7 天窗口；
-ccbar 读取 `limit_window_seconds` 后再决定显示 Session、Weekly 还是其他时长，
-并把 `additional_rate_limits[].limit_name` 用作模型专属行名。
+Codex 同样使用服务端自描述数据。ccbar 只从主 `rate_limit` 中选取
+`limit_window_seconds = 604800` 的 7 天窗口；`additional_rate_limits`
+中的模型专属额度会被忽略。
 
 ## 安装
 
@@ -113,8 +110,8 @@ GET https://chatgpt.com/backend-api/wham/usage
 | `limits[]`，`kind = "session"`                        | Session  |
 | `limits[]`，`kind = "weekly_all"`                     | Weekly   |
 | `limits[]` 中带 `scope.model` 的那条                  | 该模型的 `display_name`（如 Fable） |
-| Codex `rate_limit.primary_window` / `secondary_window` | 按 `limit_window_seconds` 动态命名 |
-| Codex `additional_rate_limits[]`                       | 对应的 `limit_name` |
+| Codex 主 `rate_limit` 中的 7 天窗口              | Weekly   |
+| Codex `additional_rate_limits[]`                       | 不显示   |
 
 `limits` 数组是自描述的，模型名随数据下发。老账号若拿不到 `limits`，会回退到
 早期的顶层字段 `five_hour` / `seven_day` / `seven_day_sonnet` / `seven_day_opus`。

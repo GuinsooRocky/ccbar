@@ -6,8 +6,8 @@ A tiny macOS 14+ menu bar app that surfaces your **Claude Code + OpenAI
 Codex** usage quotas right in the menu bar.
 
 - **Claude and Codex together**: Claude shows Session / Weekly / current
-  premium-model limits. Codex rows follow the actual 5-hour, 7-day, and
-  model-specific windows returned for your plan. Providers that are not
+  premium-model limits. Codex shows only the shared 7-day Weekly quota for
+  the main models and hides model-specific windows. Providers that are not
   currently running disappear within 1 minute, and one failing does not hide the other.
 - **Tiny footprint**: 1.0 MB bundle, ~45 MB RAM idle, ~0 % CPU when idle
   (auto-refresh every 5 minutes, also manual ⌘R). Rust + AppKit
@@ -29,8 +29,6 @@ Codex** usage quotas right in the menu bar.
  │ ─────────────────────────────────────── │
  │  Weekly     ██░░░░░░      97%  6d 12h   │
  │ ─────────────────────────────────────── │
- │  Spark      ░░░░░░░░      100%  7d 0h   │
- │ ─────────────────────────────────────── │
  │  Refresh                           ⌘R   │
  │  Open on GitHub                         │
  │  Quit                              ⌘Q   │
@@ -38,9 +36,8 @@ Codex** usage quotas right in the menu bar.
 ```
 
 The status bar icon shows at most two meters: Claude's current 5-hour Session
-and Codex's current primary window (preferring 5 hours and falling back to the
-server-provided primary window). Weekly/model-specific limits and reset times
-remain in the expanded menu. Template mode auto-inverts for light/dark bars.
+and Codex's Weekly quota. Reset times remain in the expanded menu. Template
+mode auto-inverts for light/dark bars.
 
 Anthropic caps each Claude account with three independent windows — Session
 (5h rolling), Weekly (7d all-models), and a 7-day window carved out for the
@@ -54,9 +51,9 @@ Anthropic rotates the premium model — as it does every few months — ccbar fo
 the server without needing a release. See [`REFERENCE.md`](./REFERENCE.md) for
 the full window semantics.
 
-Codex is self-describing too. Plans do not necessarily return both a 5-hour
-and a 7-day window, so ccbar labels each row from `limit_window_seconds` and
-uses `additional_rate_limits[].limit_name` for model-specific rows.
+Codex is self-describing too. ccbar selects only the 7-day window where
+`limit_window_seconds = 604800` from the main `rate_limit` object and ignores
+model-specific entries in `additional_rate_limits`.
 
 ## Install
 
@@ -125,8 +122,8 @@ GET https://chatgpt.com/backend-api/wham/usage
 | `limits[]` where `kind = "session"`                 | Session  |
 | `limits[]` where `kind = "weekly_all"`              | Weekly   |
 | the `limits[]` entry carrying `scope.model`         | that model's `display_name` (e.g. Fable) |
-| Codex `rate_limit.primary_window` / `secondary_window` | label derived from `limit_window_seconds` |
-| Codex `additional_rate_limits[]`                    | its `limit_name` |
+| 7-day window in the main Codex `rate_limit`         | Weekly   |
+| Codex `additional_rate_limits[]`                    | hidden   |
 
 The `limits` array is self-describing — the model name ships with the data. If an
 account is served a response without it, ccbar falls back to the older top-level

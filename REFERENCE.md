@@ -262,12 +262,12 @@ hitting zero throttles you. They're independent ceilings, not a single budget.
 - `used_percent` is consumed quota on a 0..100 scale. The menu displays
   `100 - used_percent` as percent left.
 - `reset_at` is a Unix timestamp in seconds.
-- `limit_window_seconds` is authoritative. `18000` is labelled Session and
-  `604800` Weekly; other durations get a literal duration label.
-- A plan can return only one main window. Do not assume `primary_window` is
-  always 5 hours or that `secondary_window` is always present.
-- Every usable `additional_rate_limits[]` window becomes a row named by
-  `limit_name`, falling back to `metered_feature`.
+- ccbar displays only the main window whose `limit_window_seconds` is `604800`,
+  labelled Weekly. Other main-window durations are ignored.
+- A plan can return only one main window. If it does not include a 7-day
+  window, Codex usage is reported as unavailable.
+- `additional_rate_limits[]` is intentionally ignored, including the separate
+  GPT-5.3-Codex-Spark quota.
 
 ### Credentials
 

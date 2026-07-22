@@ -14,6 +14,7 @@ use crate::usage_api::WindowState;
 
 const USAGE_URL: &str = "https://chatgpt.com/backend-api/wham/usage";
 const USER_AGENT: &str = concat!("ccbar/", env!("CARGO_PKG_VERSION"));
+const WEEKLY_WINDOW_SECONDS: i64 = 604_800;
 
 #[derive(Debug, thiserror::Error)]
 pub enum CodexUsageError {
@@ -25,7 +26,7 @@ pub enum CodexUsageError {
     Status(u16, String),
     #[error("JSON parse failed: {0}")]
     Json(#[from] serde_json::Error),
-    #[error("response contains no Codex rate-limit windows")]
+    #[error("response contains no Codex weekly rate-limit window")]
     MissingWindows,
 }
 
@@ -40,16 +41,11 @@ pub struct CodexUsageSnapshot {
 pub struct CodexWindow {
     pub label: String,
     pub state: WindowState,
-    window_seconds: i64,
-    is_additional: bool,
 }
 
 impl CodexUsageSnapshot {
     pub fn status_window(&self) -> Option<&CodexWindow> {
-        self.windows
-            .iter()
-            .find(|window| !window.is_additional && window.window_seconds == 18_000)
-            .or_else(|| self.windows.iter().find(|window| !window.is_additional))
+        self.windows.first()
     }
 }
 
@@ -130,22 +126,9 @@ pub fn fetch_usage(
 
 fn parse_body(body: &str) -> Result<CodexUsageSnapshot, CodexUsageError> {
     let response: UsageResponse = serde_json::from_str(body)?;
-    let mut windows = rate_limit_windows(response.rate_limit.as_ref(), None);
-
-    for additional in response.additional_rate_limits.unwrap_or_default() {
-        let Some(label) = additional
-            .limit_name
-            .as_deref()
-            .or(additional.metered_feature.as_deref())
-            .filter(|value| !value.is_empty())
-        else {
-            continue;
-        };
-        windows.extend(rate_limit_windows(
-            additional.rate_limit.as_ref(),
-            Some(label),
-        ));
-    }
+    let windows = weekly_window(response.rate_limit.as_ref())
+        .into_iter()
+        .collect::<Vec<_>>();
 
     if windows.is_empty() {
         return Err(CodexUsageError::MissingWindows);
@@ -158,74 +141,25 @@ fn parse_body(body: &str) -> Result<CodexUsageSnapshot, CodexUsageError> {
     })
 }
 
-fn rate_limit_windows(
-    rate_limit: Option<&RateLimitPayload>,
-    scope: Option<&str>,
-) -> Vec<CodexWindow> {
-    let Some(rate_limit) = rate_limit else {
-        return Vec::new();
-    };
-    let payloads = [
+fn weekly_window(rate_limit: Option<&RateLimitPayload>) -> Option<CodexWindow> {
+    let rate_limit = rate_limit?;
+    let window = [
         rate_limit.primary_window.as_ref(),
         rate_limit.secondary_window.as_ref(),
-    ];
-    let valid_count = payloads
-        .iter()
-        .flatten()
-        .filter(|window| window.is_valid())
-        .count();
+    ]
+    .into_iter()
+    .flatten()
+    .find(|window| window.limit_window_seconds == Some(WEEKLY_WINDOW_SECONDS))?;
 
-    payloads
-        .into_iter()
-        .flatten()
-        .filter_map(|window| {
-            let state = window.to_state()?;
-            let duration_label = duration_label(window.limit_window_seconds?);
-            let label = match (scope, valid_count) {
-                (Some(scope), 1) => compact_limit_label(scope),
-                (Some(scope), _) => format!("{} · {duration_label}", compact_limit_label(scope)),
-                (None, _) => duration_label,
-            };
-            Some(CodexWindow {
-                label,
-                state,
-                window_seconds: window.limit_window_seconds?,
-                is_additional: scope.is_some(),
-            })
-        })
-        .collect()
-}
-
-fn compact_limit_label(label: &str) -> String {
-    label
-        .rsplit_once("-Codex-")
-        .map(|(_, model)| model.replace('-', " "))
-        .filter(|model| !model.is_empty())
-        .unwrap_or_else(|| label.to_owned())
-}
-
-fn duration_label(seconds: i64) -> String {
-    match seconds {
-        18_000 => "Session".into(),
-        604_800 => "Weekly".into(),
-        seconds if seconds > 0 && seconds % 86_400 == 0 => format!("{}d window", seconds / 86_400),
-        seconds if seconds > 0 && seconds % 3_600 == 0 => format!("{}h window", seconds / 3_600),
-        seconds if seconds > 0 && seconds % 60 == 0 => format!("{}m window", seconds / 60),
-        seconds => format!("{seconds}s window"),
-    }
+    Some(CodexWindow {
+        label: "Weekly".into(),
+        state: window.to_state()?,
+    })
 }
 
 #[derive(Debug, Deserialize)]
 struct UsageResponse {
     plan_type: Option<String>,
-    rate_limit: Option<RateLimitPayload>,
-    additional_rate_limits: Option<Vec<AdditionalRateLimitPayload>>,
-}
-
-#[derive(Debug, Deserialize)]
-struct AdditionalRateLimitPayload {
-    limit_name: Option<String>,
-    metered_feature: Option<String>,
     rate_limit: Option<RateLimitPayload>,
 }
 
@@ -243,10 +177,6 @@ struct WindowPayload {
 }
 
 impl WindowPayload {
-    fn is_valid(&self) -> bool {
-        self.used_percent.is_some() && self.limit_window_seconds.is_some()
-    }
-
     fn to_state(&self) -> Option<WindowState> {
         Some(WindowState {
             fraction_used: self.used_percent? / 100.0,
@@ -271,7 +201,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn maps_real_weekly_only_shape_and_additional_limit() {
+    fn keeps_main_weekly_window_and_ignores_additional_limits() {
         let body = r#"{
             "plan_type": "pro",
             "rate_limit": {
@@ -297,11 +227,9 @@ mod tests {
 
         let snapshot = parse_body(body).expect("parse");
         assert_eq!(snapshot.plan.as_deref(), Some("pro"));
-        assert_eq!(snapshot.windows.len(), 2);
+        assert_eq!(snapshot.windows.len(), 1);
         assert_eq!(snapshot.windows[0].label, "Weekly");
         assert_eq!(snapshot.windows[0].state.percent_left(), 97);
-        assert_eq!(snapshot.windows[1].label, "Spark");
-        assert_eq!(snapshot.windows[1].state.percent_left(), 100);
         assert_eq!(
             snapshot.status_window().map(|window| window.label.as_str()),
             Some("Weekly")
@@ -309,7 +237,7 @@ mod tests {
     }
 
     #[test]
-    fn labels_primary_and_secondary_by_actual_duration() {
+    fn keeps_weekly_and_ignores_session_window() {
         let body = r#"{
             "rate_limit": {
                 "primary_window": {
@@ -326,13 +254,12 @@ mod tests {
         }"#;
 
         let snapshot = parse_body(body).expect("parse");
-        assert_eq!(snapshot.windows[0].label, "Session");
-        assert_eq!(snapshot.windows[1].label, "Weekly");
-        assert_eq!(snapshot.windows[0].state.percent_left(), 78);
-        assert_eq!(snapshot.windows[1].state.percent_left(), 57);
+        assert_eq!(snapshot.windows.len(), 1);
+        assert_eq!(snapshot.windows[0].label, "Weekly");
+        assert_eq!(snapshot.windows[0].state.percent_left(), 57);
         assert_eq!(
             snapshot.status_window().map(|window| window.label.as_str()),
-            Some("Session")
+            Some("Weekly")
         );
     }
 

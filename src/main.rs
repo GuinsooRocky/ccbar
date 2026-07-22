@@ -592,7 +592,7 @@ fn update_icon(
     button.setTitle(&NSString::from_str(""));
 }
 
-/// At most two meters: Claude's 5h session and Codex's primary current window.
+/// At most two meters: Claude's 5h session and Codex's weekly quota.
 fn render_meter_icon(meters: &[f64]) -> Retained<NSImage> {
     let size = NSSize::new(22.0, 16.0);
     let image = unsafe { NSImage::initWithSize(NSImage::alloc(), size) };
