@@ -1,3 +1,6 @@
+mod activity;
+mod codex_credentials;
+mod codex_usage_api;
 mod credentials;
 mod usage_api;
 
@@ -6,9 +9,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
-use objc2::{
-    AnyThread, DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel,
-};
+use objc2::{AnyThread, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSBezierPath, NSColor, NSImage, NSMenu,
     NSMenuItem, NSStackView, NSStackViewDistribution, NSStatusBar, NSStatusItem, NSTextAlignment,
@@ -21,7 +22,10 @@ use objc2_foundation::{
 
 const REPO_URL: &str = "https://github.com/GuinsooRocky/ccbar";
 const REFRESH_INTERVAL_SECS: NSTimeInterval = 300.0;
+const ACTIVITY_INTERVAL_SECS: NSTimeInterval = 60.0;
 
+use activity::ProviderActivity;
+use codex_usage_api::CodexUsageSnapshot;
 use usage_api::{UsageSnapshot, WindowState};
 
 // Minimal FFI to libdispatch so a worker thread can hop UI work back to the
@@ -52,16 +56,25 @@ mod dispatch {
     }
 }
 
-enum MenuState {
-    Ok(UsageSnapshot),
+#[derive(Clone)]
+enum ProviderState<T> {
+    Ok(T),
+    Unavailable,
     Error(String),
 }
 
+#[derive(Clone)]
+struct MenuState {
+    claude: ProviderState<UsageSnapshot>,
+    codex: ProviderState<CodexUsageSnapshot>,
+}
+
 struct AppState {
-    access_token: String,
     menu: Retained<NSMenu>,
     controller: Retained<RefreshController>,
     status_item: Retained<NSStatusItem>,
+    current: MenuState,
+    activity: ProviderActivity,
 }
 
 thread_local! {
@@ -95,6 +108,11 @@ define_class!(
         #[unsafe(method(handleTimerRefresh:))]
         fn handle_timer_refresh(&self, _sender: *mut AnyObject) {
             refresh_now(false);
+        }
+
+        #[unsafe(method(handleActivityTimer:))]
+        fn handle_activity_timer(&self, _sender: *mut AnyObject) {
+            refresh_activity();
         }
 
         #[unsafe(method(openRepo:))]
@@ -144,34 +162,6 @@ ccbar is running inside macOS AppTranslocation sandbox, which pins CPU at 100%.
         }
     }
 
-    let creds = match credentials::Credentials::load() {
-        Ok(c) => {
-            let tail: String = c
-                .access_token
-                .chars()
-                .rev()
-                .take(6)
-                .collect::<Vec<_>>()
-                .into_iter()
-                .rev()
-                .collect();
-            eprintln!(
-                "ccbar: credentials ok — source={:?} token=...{} tier={:?} has_user_profile={}",
-                c.source,
-                tail,
-                c.rate_limit_tier,
-                c.has_user_profile_scope(),
-            );
-            c
-        }
-        Err(e) => {
-            eprintln!("ccbar: credentials error: {e}");
-            // Still boot so the user sees an error menu rather than silent exit.
-            run_with_error(format!("credentials: {e}"));
-            return;
-        }
-    };
-
     let mtm = MainThreadMarker::new().expect("must run on main thread");
     let app = NSApplication::sharedApplication(mtm);
     app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
@@ -183,18 +173,20 @@ ccbar is running inside macOS AppTranslocation sandbox, which pins CPU at 100%.
     let controller = RefreshController::new(mtm);
     status_item.setMenu(Some(&menu));
 
+    let initial = fetch_state();
+    let activity = activity::detect();
+    update_icon(&status_item, mtm, &initial, activity);
+    populate_menu(&menu, mtm, &initial, activity, &controller);
+
     APP_STATE.with(|cell| {
         *cell.borrow_mut() = Some(AppState {
-            access_token: creds.access_token.clone(),
             menu: menu.clone(),
             controller: controller.clone(),
             status_item: status_item.clone(),
+            current: initial,
+            activity,
         });
     });
-
-    let initial = fetch_state(&creds.access_token);
-    update_icon(&status_item, mtm, &initial);
-    populate_menu(&menu, mtm, &initial, &controller);
 
     unsafe {
         NSTimer::scheduledTimerWithTimeInterval_target_selector_userInfo_repeats(
@@ -204,35 +196,55 @@ ccbar is running inside macOS AppTranslocation sandbox, which pins CPU at 100%.
             None,
             true,
         );
+        NSTimer::scheduledTimerWithTimeInterval_target_selector_userInfo_repeats(
+            ACTIVITY_INTERVAL_SECS,
+            &*controller,
+            sel!(handleActivityTimer:),
+            None,
+            true,
+        );
     }
 
     app.run();
 }
 
-fn run_with_error(msg: String) {
-    let mtm = MainThreadMarker::new().expect("must run on main thread");
-    let app = NSApplication::sharedApplication(mtm);
-    app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
-
-    let status_bar = NSStatusBar::systemStatusBar();
-    let status_item = status_bar.statusItemWithLength(NSVariableStatusItemLength);
-
-    let menu = NSMenu::new(mtm);
-    let controller = RefreshController::new(mtm);
-    let state = MenuState::Error(msg);
-    update_icon(&status_item, mtm, &state);
-    populate_menu(&menu, mtm, &state, &controller);
-    status_item.setMenu(Some(&menu));
-
-    let _keep = status_item;
-    app.run();
+fn fetch_state() -> MenuState {
+    let (claude, codex) = std::thread::scope(|scope| {
+        let claude = scope.spawn(fetch_claude_state);
+        let codex = scope.spawn(fetch_codex_state);
+        (
+            claude.join().expect("Claude fetch thread panicked"),
+            codex.join().expect("Codex fetch thread panicked"),
+        )
+    });
+    MenuState { claude, codex }
 }
 
-fn fetch_state(token: &str) -> MenuState {
-    match usage_api::fetch_usage(token) {
+fn fetch_claude_state() -> ProviderState<UsageSnapshot> {
+    let credentials = match credentials::Credentials::load() {
+        Ok(credentials) => {
+            eprintln!(
+                "ccbar: Claude credentials ok — source={:?} tier={:?} has_user_profile={}",
+                credentials.source,
+                credentials.rate_limit_tier,
+                credentials.has_user_profile_scope(),
+            );
+            credentials
+        }
+        Err(credentials::CredentialsError::NotFound) => {
+            eprintln!("ccbar: Claude credentials not found — hiding provider");
+            return ProviderState::Unavailable;
+        }
+        Err(error) => {
+            eprintln!("ccbar: Claude credentials error: {error}");
+            return ProviderState::Error(format!("credentials: {error}"));
+        }
+    };
+
+    match usage_api::fetch_usage(&credentials.access_token) {
         Ok(snap) => {
             eprintln!(
-                "ccbar: usage ok — session={:.0}% used, weekly={}, {}",
+                "ccbar: Claude usage ok — session={:.0}% used, weekly={}, {}",
                 snap.session.fraction_used * 100.0,
                 snap.weekly
                     .as_ref()
@@ -247,7 +259,7 @@ fn fetch_state(token: &str) -> MenuState {
                     ))
                     .unwrap_or_else(|| "scoped=n/a".into()),
             );
-            MenuState::Ok(snap)
+            ProviderState::Ok(snap)
         }
         Err(e) => {
             let mut chain = format!("{e}");
@@ -256,8 +268,60 @@ fn fetch_state(token: &str) -> MenuState {
                 chain.push_str(&format!(" <- {s}"));
                 src = s.source();
             }
-            eprintln!("ccbar: usage error: {chain}");
-            MenuState::Error(format!("usage API: {e}"))
+            eprintln!("ccbar: Claude usage error: {chain}");
+            ProviderState::Error(format!("usage API: {e}"))
+        }
+    }
+}
+
+fn fetch_codex_state() -> ProviderState<CodexUsageSnapshot> {
+    let credentials = match codex_credentials::CodexCredentials::load() {
+        Ok(credentials) => {
+            eprintln!(
+                "ccbar: Codex credentials ok — source={:?} account_id={}",
+                credentials.source,
+                if credentials.account_id.is_some() {
+                    "yes"
+                } else {
+                    "no"
+                },
+            );
+            credentials
+        }
+        Err(
+            codex_credentials::CodexCredentialsError::NotFound
+            | codex_credentials::CodexCredentialsError::MissingOAuthToken,
+        ) => {
+            eprintln!("ccbar: Codex subscription credentials not found — hiding provider");
+            return ProviderState::Unavailable;
+        }
+        Err(error) => {
+            eprintln!("ccbar: Codex credentials error: {error}");
+            return ProviderState::Error(format!("credentials: {error}"));
+        }
+    };
+
+    match codex_usage_api::fetch_usage(&credentials.access_token, credentials.account_id.as_deref())
+    {
+        Ok(snapshot) => {
+            let usage = snapshot
+                .windows
+                .iter()
+                .map(|window| {
+                    format!(
+                        "{}={:.0}%",
+                        window.label.to_lowercase(),
+                        window.state.fraction_used * 100.0
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            eprintln!("ccbar: Codex usage ok — {usage}");
+            ProviderState::Ok(snapshot)
+        }
+        Err(error) => {
+            eprintln!("ccbar: Codex usage error: {error}");
+            ProviderState::Error(format!("usage API: {error}"))
         }
     }
 }
@@ -269,50 +333,83 @@ fn refresh_now(manual: bool) {
         return;
     }
 
-    let token = APP_STATE.with(|cell| cell.borrow().as_ref().map(|s| s.access_token.clone()));
-    let Some(token) = token else {
+    let ready = APP_STATE.with(|cell| cell.borrow().is_some());
+    if !ready {
         IN_FLIGHT.store(false, Ordering::Release);
         return;
-    };
+    }
 
     std::thread::spawn(move || {
-        let mut state = fetch_state(&token);
-        // On 401 the OAuth token may have rotated — reload once from keychain.
-        if matches!(state, MenuState::Error(ref m) if m.contains("token expired")) {
-            if let Ok(fresh) = credentials::Credentials::load() {
-                state = fetch_state(&fresh.access_token);
-                let new_token = fresh.access_token.clone();
-                dispatch::on_main(move || {
-                    APP_STATE.with(|cell| {
-                        if let Some(s) = cell.borrow_mut().as_mut() {
-                            s.access_token = new_token;
-                        }
-                    });
-                });
-            }
-        }
+        let state = fetch_state();
         dispatch::on_main(move || {
-            // Timer-triggered failures are silent — keep last good data.
-            if !manual && matches!(state, MenuState::Error(_)) {
-                eprintln!("ccbar: timer refresh failed, keeping last state");
-            } else {
-                apply_state(state);
-            }
+            apply_state(state, !manual);
             IN_FLIGHT.store(false, Ordering::Release);
         });
     });
 }
 
-fn apply_state(new_state: MenuState) {
+fn refresh_activity() {
+    let detected = activity::detect();
+    let mut newly_active = false;
+    APP_STATE.with(|cell| {
+        let mut borrow = cell.borrow_mut();
+        let Some(state) = borrow.as_mut() else { return };
+        if state.activity == detected {
+            return;
+        }
+
+        newly_active = (!state.activity.claude && detected.claude)
+            || (!state.activity.codex && detected.codex);
+        state.activity = detected;
+        let Some(mtm) = MainThreadMarker::new() else {
+            return;
+        };
+        update_icon(&state.status_item, mtm, &state.current, detected);
+        populate_menu(
+            &state.menu,
+            mtm,
+            &state.current,
+            detected,
+            &state.controller,
+        );
+    });
+
+    if newly_active {
+        refresh_now(false);
+    }
+}
+
+fn apply_state(mut new_state: MenuState, keep_previous_on_error: bool) {
     let Some(mtm) = MainThreadMarker::new() else {
         eprintln!("ccbar: apply_state called off main thread — skipping");
         return;
     };
     APP_STATE.with(|cell| {
-        let borrow = cell.borrow();
-        let Some(state) = &*borrow else { return };
-        update_icon(&state.status_item, mtm, &new_state);
-        populate_menu(&state.menu, mtm, &new_state, &state.controller);
+        let mut borrow = cell.borrow_mut();
+        let Some(state) = borrow.as_mut() else { return };
+        if keep_previous_on_error {
+            if matches!(new_state.claude, ProviderState::Error(_))
+                && matches!(state.current.claude, ProviderState::Ok(_))
+            {
+                eprintln!("ccbar: Claude timer refresh failed, keeping last state");
+                new_state.claude = state.current.claude.clone();
+            }
+            if matches!(new_state.codex, ProviderState::Error(_))
+                && matches!(state.current.codex, ProviderState::Ok(_))
+            {
+                eprintln!("ccbar: Codex timer refresh failed, keeping last state");
+                new_state.codex = state.current.codex.clone();
+            }
+        }
+        update_icon(&state.status_item, mtm, &new_state, state.activity);
+        populate_menu(
+            &state.menu,
+            mtm,
+            &new_state,
+            state.activity,
+            &state.controller,
+        );
+        state.current = new_state;
     });
 }
 
@@ -320,37 +417,75 @@ fn populate_menu(
     menu: &NSMenu,
     mtm: MainThreadMarker,
     state: &MenuState,
+    activity: ProviderActivity,
     controller: &RefreshController,
 ) {
     menu.removeAllItems();
 
-    match state {
-        MenuState::Ok(snap) => {
-            let local = snap.fetched_at.with_timezone(&chrono::Local);
-            let updated = format!("Updated {}", local.format("%H:%M"));
-            add_row(menu, mtm, &["Claude", &updated]);
-            menu.addItem(&NSMenuItem::separatorItem(mtm));
+    let mut provider_count = 0;
+    if activity.claude {
+        match &state.claude {
+            ProviderState::Ok(snap) => {
+                provider_count += 1;
+                let local = snap.fetched_at.with_timezone(&chrono::Local);
+                let updated = format!("Updated {}", local.format("%H:%M"));
+                add_row(menu, mtm, &["Claude", &updated]);
+                add_window_section(menu, mtm, "Session", Some(&snap.session));
+                add_window_section(menu, mtm, "Weekly", snap.weekly.as_ref());
 
-            add_window_section(menu, mtm, "Session", Some(&snap.session));
-            menu.addItem(&NSMenuItem::separatorItem(mtm));
-
-            add_window_section(menu, mtm, "Weekly", snap.weekly.as_ref());
-            menu.addItem(&NSMenuItem::separatorItem(mtm));
-
-            if let Some(scoped) = &snap.scoped {
-                add_window_section(menu, mtm, &scoped.label, Some(&scoped.state));
-                menu.addItem(&NSMenuItem::separatorItem(mtm));
+                if let Some(scoped) = &snap.scoped {
+                    add_window_section(menu, mtm, &scoped.label, Some(&scoped.state));
+                }
             }
-        }
-        MenuState::Error(msg) => {
-            add_label(menu, mtm, "Claude  error");
-            menu.addItem(&NSMenuItem::separatorItem(mtm));
-            for chunk in wrap(msg, 60) {
-                add_label(menu, mtm, chunk);
+            ProviderState::Error(msg) => {
+                provider_count += 1;
+                add_label(menu, mtm, "Claude  error");
+                for chunk in wrap(msg, 60) {
+                    add_label(menu, mtm, chunk);
+                }
             }
-            menu.addItem(&NSMenuItem::separatorItem(mtm));
+            ProviderState::Unavailable => {}
         }
     }
+
+    if activity.codex {
+        match &state.codex {
+            ProviderState::Ok(snapshot) => {
+                if provider_count > 0 {
+                    menu.addItem(&NSMenuItem::separatorItem(mtm));
+                }
+                provider_count += 1;
+                let local = snapshot.fetched_at.with_timezone(&chrono::Local);
+                let updated = format!("Updated {}", local.format("%H:%M"));
+                let title = snapshot
+                    .plan
+                    .as_deref()
+                    .map(|plan| format!("Codex · {}", plan.to_uppercase()))
+                    .unwrap_or_else(|| "Codex".into());
+                add_row(menu, mtm, &[&title, &updated]);
+
+                for window in &snapshot.windows {
+                    add_window_section(menu, mtm, &window.label, Some(&window.state));
+                }
+            }
+            ProviderState::Error(msg) => {
+                if provider_count > 0 {
+                    menu.addItem(&NSMenuItem::separatorItem(mtm));
+                }
+                provider_count += 1;
+                add_label(menu, mtm, "Codex  error");
+                for chunk in wrap(msg, 60) {
+                    add_label(menu, mtm, chunk);
+                }
+            }
+            ProviderState::Unavailable => {}
+        }
+    }
+
+    if provider_count == 0 {
+        add_label(menu, mtm, "No active Claude or Codex session");
+    }
+    menu.addItem(&NSMenuItem::separatorItem(mtm));
 
     let refresh = NSMenuItem::new(mtm);
     refresh.setTitle(&NSString::from_str("Refresh"));
@@ -389,15 +524,14 @@ fn window_summary(w: &WindowState) -> String {
     }
 }
 
-fn add_window_section(
-    menu: &NSMenu,
-    mtm: MainThreadMarker,
-    label: &str,
-    w: Option<&WindowState>,
-) {
+fn add_window_section(menu: &NSMenu, mtm: MainThreadMarker, label: &str, w: Option<&WindowState>) {
     match w {
         Some(w) => {
-            add_row(menu, mtm, &[label, &make_bar(w.fraction_used, 8), &window_summary(w)]);
+            add_row(
+                menu,
+                mtm,
+                &[label, &make_bar(w.fraction_used, 8), &window_summary(w)],
+            );
         }
         None => {
             add_row(menu, mtm, &[label, "no data"]);
@@ -413,71 +547,99 @@ fn make_bar(fraction_used: f64, width: usize) -> String {
 
 fn load_symbol(name: &str) -> Option<Retained<NSImage>> {
     unsafe {
-        NSImage::imageWithSystemSymbolName_accessibilityDescription(
-            &NSString::from_str(name),
-            None,
-        )
+        NSImage::imageWithSystemSymbolName_accessibilityDescription(&NSString::from_str(name), None)
     }
 }
 
-fn update_icon(status_item: &NSStatusItem, mtm: MainThreadMarker, state: &MenuState) {
-    let Some(button) = status_item.button(mtm) else { return };
-    match state {
-        MenuState::Ok(snap) => {
-            let session = snap.session.fraction_used.clamp(0.0, 1.0);
-            let weekly = snap
-                .weekly
-                .as_ref()
-                .map(|w| w.fraction_used.clamp(0.0, 1.0))
-                .unwrap_or(0.0);
-            let img = render_meter_icon(session, weekly);
+fn update_icon(
+    status_item: &NSStatusItem,
+    mtm: MainThreadMarker,
+    state: &MenuState,
+    activity: ProviderActivity,
+) {
+    let Some(button) = status_item.button(mtm) else {
+        return;
+    };
+    let mut meters = Vec::with_capacity(4);
+    if activity.claude {
+        if let ProviderState::Ok(snapshot) = &state.claude {
+            meters.push(snapshot.session.fraction_used);
+            meters.push(
+                snapshot
+                    .weekly
+                    .as_ref()
+                    .map(|window| window.fraction_used)
+                    .unwrap_or(0.0),
+            );
+        }
+    }
+    if activity.codex {
+        if let ProviderState::Ok(snapshot) = &state.codex {
+            meters.extend(
+                snapshot
+                    .windows
+                    .iter()
+                    .take(2)
+                    .map(|window| window.state.fraction_used),
+            );
+        }
+    }
+
+    if meters.is_empty() {
+        let symbol = if activity.claude || activity.codex {
+            "exclamationmark.triangle.fill"
+        } else {
+            "pause.circle.fill"
+        };
+        if let Some(img) = load_symbol(symbol) {
             button.setImage(Some(&img));
             button.setTitle(&NSString::from_str(""));
         }
-        MenuState::Error(_) => {
-            if let Some(img) = load_symbol("exclamationmark.triangle.fill") {
-                button.setImage(Some(&img));
-                button.setTitle(&NSString::from_str(""));
-            }
-        }
+        return;
     }
+
+    let img = render_meter_icon(&meters);
+    button.setImage(Some(&img));
+    button.setTitle(&NSString::from_str(""));
 }
 
-/// Two stacked horizontal meters: thicker top = session (5h), thinner bottom = weekly (7d).
-/// Rendered as a template image so macOS auto-inverts for dark/light menu bar.
-fn render_meter_icon(session_used: f64, weekly_used: f64) -> Retained<NSImage> {
-    let size = NSSize::new(22.0, 14.0);
+/// Packs one active provider into one pair of meters and both providers into four.
+fn render_meter_icon(meters: &[f64]) -> Retained<NSImage> {
+    let size = NSSize::new(22.0, 16.0);
     let image = unsafe { NSImage::initWithSize(NSImage::alloc(), size) };
 
     unsafe { image.lockFocus() };
 
     let margin_x: f64 = 2.0;
     let bar_width: f64 = size.width - margin_x * 2.0;
-    let top_y: f64 = 8.0;
-    let top_h: f64 = 3.5;
-    let bot_y: f64 = 3.5;
-    let bot_h: f64 = 1.5;
+    let bar_height: f64 = 2.0;
+    let positions: &[f64] = match meters.len() {
+        1 => &[7.0],
+        2 => &[9.5, 4.0],
+        3 => &[11.0, 6.5, 2.0],
+        _ => &[12.0, 9.0, 5.0, 2.0],
+    };
 
     // Tracks (subtle outline so empty bars are still visible on busy wallpapers).
     let track_color = unsafe { NSColor::labelColor().colorWithAlphaComponent(0.25) };
     unsafe { track_color.set() };
-    let top_track = NSRect::new(NSPoint::new(margin_x, top_y), NSSize::new(bar_width, top_h));
-    let bot_track = NSRect::new(NSPoint::new(margin_x, bot_y), NSSize::new(bar_width, bot_h));
-    unsafe { NSBezierPath::fillRect(top_track) };
-    unsafe { NSBezierPath::fillRect(bot_track) };
+    for &y in positions {
+        let track = NSRect::new(
+            NSPoint::new(margin_x, y),
+            NSSize::new(bar_width, bar_height),
+        );
+        unsafe { NSBezierPath::fillRect(track) };
+    }
 
     // Filled portions.
     unsafe { NSColor::labelColor().set() };
-    let top_fill = NSRect::new(
-        NSPoint::new(margin_x, top_y),
-        NSSize::new(bar_width * session_used, top_h),
-    );
-    let bot_fill = NSRect::new(
-        NSPoint::new(margin_x, bot_y),
-        NSSize::new(bar_width * weekly_used, bot_h),
-    );
-    unsafe { NSBezierPath::fillRect(top_fill) };
-    unsafe { NSBezierPath::fillRect(bot_fill) };
+    for (&used, &y) in meters.iter().zip(positions) {
+        let fill = NSRect::new(
+            NSPoint::new(margin_x, y),
+            NSSize::new(bar_width * used.clamp(0.0, 1.0), bar_height),
+        );
+        unsafe { NSBezierPath::fillRect(fill) };
+    }
 
     unsafe { image.unlockFocus() };
     image.setTemplate(true);
@@ -505,9 +667,11 @@ fn add_label(menu: &NSMenu, mtm: MainThreadMarker, text: impl AsRef<str>) {
 /// The last column is pinned to a fixed width + right-aligned so variable
 /// summary strings (e.g. "100%" vs "76% 3h 35m") don't shift the bar column.
 fn add_row(menu: &NSMenu, mtm: MainThreadMarker, cols: &[&str]) {
-    const ROW_WIDTH: f64 = 280.0;
+    const ROW_WIDTH: f64 = 320.0;
     const ROW_HEIGHT: f64 = 26.0;
     const H_INSET: f64 = 14.0; // matches native menu item horizontal padding
+    const LEFT_COL_WIDTH: f64 = 110.0;
+    const BAR_COL_WIDTH: f64 = 90.0;
     const RIGHT_COL_WIDTH: f64 = 90.0; // wide enough for "XX%  Xd XXh"
 
     let n = cols.len();
@@ -517,11 +681,20 @@ fn add_row(menu: &NSMenu, mtm: MainThreadMarker, cols: &[&str]) {
         .map(|(i, text)| {
             let label = NSTextField::labelWithString(&NSString::from_str(text), mtm);
             unsafe { label.setTextColor(Some(&NSColor::secondaryLabelColor())) };
+            if n >= 3 && i == 0 {
+                let anchor = unsafe { label.widthAnchor() };
+                let constraint = unsafe { anchor.constraintEqualToConstant(LEFT_COL_WIDTH) };
+                unsafe { constraint.setActive(true) };
+            } else if n >= 3 && i == 1 {
+                unsafe { label.setAlignment(NSTextAlignment::Center) };
+                let anchor = unsafe { label.widthAnchor() };
+                let constraint = unsafe { anchor.constraintEqualToConstant(BAR_COL_WIDTH) };
+                unsafe { constraint.setActive(true) };
+            }
             if i + 1 == n && n >= 2 {
                 unsafe { label.setAlignment(NSTextAlignment::Right) };
                 let anchor = unsafe { label.widthAnchor() };
-                let constraint =
-                    unsafe { anchor.constraintEqualToConstant(RIGHT_COL_WIDTH) };
+                let constraint = unsafe { anchor.constraintEqualToConstant(RIGHT_COL_WIDTH) };
                 unsafe { constraint.setActive(true) };
             }
             // NSTextField -> NSControl -> NSView.

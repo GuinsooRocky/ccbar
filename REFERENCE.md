@@ -1,19 +1,22 @@
-# ccbar — Claude quota data source reference
+# ccbar — Claude and Codex quota data source reference
 
-Distilled from `steipete/CodexBar` (MIT), then re-verified against the live
-endpoint on 2026-07-13. Only the subset needed for the "Claude title + Session +
-Weekly + premium-model + Quit" menu.
+Distilled from the official `openai/codex` client and `steipete/CodexBar`
+(MIT), then re-verified against live Claude and Codex endpoints on 2026-07-13
+and 2026-07-22 respectively.
 
 ## Scope for ccbar
 
-- Data source: **OAuth API only**. No Web cookie, no CLI PTY, no local JSONL
+- Data source: **OAuth APIs only**. No Web cookie, no CLI PTY, no local JSONL
   cost scan.
-- Menu surface: Claude title, Session, Weekly, the current premium model's
-  window (name read from the response, not hardcoded), Quit.
+- Menu surface: Claude and Codex titles, all returned quota windows, Refresh,
+  Open on GitHub, and Quit.
 - Everything below that CodexBar does beyond this (Web fallback, CLI fallback,
   extra_usage, multi-account, watchdog process) is intentionally out of scope.
+- Provider visibility is refreshed every minute from the local process list.
+  Interactive `claude` / `codex` CLIs and their macOS apps count as active;
+  background `claude mcp serve` and `codex mcp-server` processes do not.
 
-## OAuth usage endpoint
+## Claude OAuth usage endpoint
 
 - `GET https://api.anthropic.com/api/oauth/usage`
 - Required headers:
@@ -215,6 +218,84 @@ hitting zero throttles you. They're independent ceilings, not a single budget.
   the OAuth path doesn't expose them. If we ever want them, we'd have to add
   the CLI PTY source — out of scope for ccbar.
 
+## Codex OAuth usage endpoint
+
+- `GET https://chatgpt.com/backend-api/wham/usage`
+- Headers:
+  - `Authorization: Bearer <tokens.access_token>`
+  - `ChatGPT-Account-Id: <tokens.account_id>` when present
+  - `Accept: application/json`
+  - `User-Agent: ccbar/<version>`
+- The official Codex backend client selects `/wham/usage` for a ChatGPT
+  `backend-api` base URL and `/api/codex/usage` for a Codex API-style base URL.
+  ccbar currently supports the standard ChatGPT route only.
+
+### Response subset
+
+```json
+{
+  "plan_type": "pro",
+  "rate_limit": {
+    "primary_window": {
+      "used_percent": 3,
+      "limit_window_seconds": 604800,
+      "reset_at": 1785258196
+    },
+    "secondary_window": null
+  },
+  "additional_rate_limits": [
+    {
+      "limit_name": "GPT-5.3-Codex-Spark",
+      "metered_feature": "codex_bengalfox",
+      "rate_limit": {
+        "primary_window": {
+          "used_percent": 0,
+          "limit_window_seconds": 604800,
+          "reset_at": 1785299799
+        }
+      }
+    }
+  ]
+}
+```
+
+- `used_percent` is consumed quota on a 0..100 scale. The menu displays
+  `100 - used_percent` as percent left.
+- `reset_at` is a Unix timestamp in seconds.
+- `limit_window_seconds` is authoritative. `18000` is labelled Session and
+  `604800` Weekly; other durations get a literal duration label.
+- A plan can return only one main window. Do not assume `primary_window` is
+  always 5 hours or that `secondary_window` is always present.
+- Every usable `additional_rate_limits[]` window becomes a row named by
+  `limit_name`, falling back to `metered_feature`.
+
+### Credentials
+
+Codex file-backed credentials are read from `$CODEX_HOME/auth.json`, defaulting
+to `~/.codex/auth.json`:
+
+```json
+{
+  "auth_mode": "chatgpt",
+  "tokens": {
+    "access_token": "...",
+    "refresh_token": "...",
+    "id_token": "...",
+    "account_id": "..."
+  }
+}
+```
+
+ccbar reads only `access_token` and `account_id`. Environment overrides are
+`CCBAR_CODEX_OAUTH_TOKEN` and `CCBAR_CODEX_ACCOUNT_ID`. API-key-only auth is
+rejected because it has API billing rather than ChatGPT subscription windows.
+OS keyring-backed Codex credentials and token refresh are not implemented;
+run `codex` to refresh a stale file token.
+
+The official Codex manual documents `CODEX_HOME`, `auth.json`, and the
+`file | keyring | auto` credential storage modes. Treat `auth.json` like a
+password and never log or copy its token values.
+
 ## Source files referenced
 
 - `docs/claude.md`
@@ -224,3 +305,8 @@ hitting zero throttles you. They're independent ceilings, not a single budget.
 - `Sources/CodexBarCore/Providers/Claude/ClaudePlan.swift`
 - `Sources/CodexBarCore/Providers/Claude/ClaudeOAuth/ClaudeOAuthUsageFetcher.swift`
 - `Sources/CodexBarCore/Providers/Claude/ClaudeOAuth/ClaudeOAuthCredentials.swift`
+- `openai/codex/codex-rs/backend-client/src/client.rs`
+- `openai/codex/codex-rs/backend-client/src/client/rate_limit_resets.rs`
+- `openai/codex/codex-rs/codex-backend-openapi-models/src/models/rate_limit_status_payload.rs`
+- `Sources/CodexBarCore/Providers/Codex/CodexOAuth/CodexOAuthCredentials.swift`
+- `Sources/CodexBarCore/Providers/Codex/CodexOAuth/CodexOAuthUsageFetcher.swift`
