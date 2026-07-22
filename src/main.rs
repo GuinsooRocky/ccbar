@@ -560,28 +560,17 @@ fn update_icon(
     let Some(button) = status_item.button(mtm) else {
         return;
     };
-    let mut meters = Vec::with_capacity(4);
+    let mut meters = Vec::with_capacity(2);
     if activity.claude {
         if let ProviderState::Ok(snapshot) = &state.claude {
             meters.push(snapshot.session.fraction_used);
-            meters.push(
-                snapshot
-                    .weekly
-                    .as_ref()
-                    .map(|window| window.fraction_used)
-                    .unwrap_or(0.0),
-            );
         }
     }
     if activity.codex {
         if let ProviderState::Ok(snapshot) = &state.codex {
-            meters.extend(
-                snapshot
-                    .windows
-                    .iter()
-                    .take(2)
-                    .map(|window| window.state.fraction_used),
-            );
+            if let Some(window) = snapshot.status_window() {
+                meters.push(window.state.fraction_used);
+            }
         }
     }
 
@@ -603,7 +592,7 @@ fn update_icon(
     button.setTitle(&NSString::from_str(""));
 }
 
-/// Packs one active provider into one pair of meters and both providers into four.
+/// At most two meters: Claude's 5h session and Codex's primary current window.
 fn render_meter_icon(meters: &[f64]) -> Retained<NSImage> {
     let size = NSSize::new(22.0, 16.0);
     let image = unsafe { NSImage::initWithSize(NSImage::alloc(), size) };

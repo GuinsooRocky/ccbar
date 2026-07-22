@@ -37,9 +37,10 @@ Codex** usage quotas right in the menu bar.
  └─────────────────────────────────────────┘
 ```
 
-The status bar icon follows running processes: one active provider uses two
-meters; Claude and Codex together use four. Template mode auto-inverts it for
-light/dark menu bars.
+The status bar icon shows at most two meters: Claude's current 5-hour Session
+and Codex's current primary window (preferring 5 hours and falling back to the
+server-provided primary window). Weekly/model-specific limits and reset times
+remain in the expanded menu. Template mode auto-inverts for light/dark bars.
 
 Anthropic caps each Claude account with three independent windows — Session
 (5h rolling), Weekly (7d all-models), and a 7-day window carved out for the

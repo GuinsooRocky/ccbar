@@ -40,6 +40,17 @@ pub struct CodexUsageSnapshot {
 pub struct CodexWindow {
     pub label: String,
     pub state: WindowState,
+    window_seconds: i64,
+    is_additional: bool,
+}
+
+impl CodexUsageSnapshot {
+    pub fn status_window(&self) -> Option<&CodexWindow> {
+        self.windows
+            .iter()
+            .find(|window| !window.is_additional && window.window_seconds == 18_000)
+            .or_else(|| self.windows.iter().find(|window| !window.is_additional))
+    }
 }
 
 pub fn fetch_usage(
@@ -175,7 +186,12 @@ fn rate_limit_windows(
                 (Some(scope), _) => format!("{} · {duration_label}", compact_limit_label(scope)),
                 (None, _) => duration_label,
             };
-            Some(CodexWindow { label, state })
+            Some(CodexWindow {
+                label,
+                state,
+                window_seconds: window.limit_window_seconds?,
+                is_additional: scope.is_some(),
+            })
         })
         .collect()
 }
@@ -286,6 +302,10 @@ mod tests {
         assert_eq!(snapshot.windows[0].state.percent_left(), 97);
         assert_eq!(snapshot.windows[1].label, "Spark");
         assert_eq!(snapshot.windows[1].state.percent_left(), 100);
+        assert_eq!(
+            snapshot.status_window().map(|window| window.label.as_str()),
+            Some("Weekly")
+        );
     }
 
     #[test]
@@ -310,6 +330,10 @@ mod tests {
         assert_eq!(snapshot.windows[1].label, "Weekly");
         assert_eq!(snapshot.windows[0].state.percent_left(), 78);
         assert_eq!(snapshot.windows[1].state.percent_left(), 57);
+        assert_eq!(
+            snapshot.status_window().map(|window| window.label.as_str()),
+            Some("Session")
+        );
     }
 
     #[test]
