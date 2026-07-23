@@ -11,9 +11,10 @@ use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2::{AnyThread, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSApplication, NSApplicationActivationPolicy, NSBezierPath, NSColor, NSImage, NSMenu,
-    NSMenuItem, NSStackView, NSStackViewDistribution, NSStatusBar, NSStatusItem, NSTextAlignment,
-    NSTextField, NSUserInterfaceLayoutOrientation, NSVariableStatusItemLength, NSView, NSWorkspace,
+    NSApplication, NSApplicationActivationPolicy, NSBezierPath, NSBezelStyle, NSButton, NSColor,
+    NSEventModifierFlags, NSImage, NSImageScaling, NSImageView, NSMenu, NSMenuItem, NSStackView,
+    NSStackViewDistribution, NSStatusBar, NSStatusItem, NSTextAlignment, NSTextField,
+    NSUserInterfaceLayoutOrientation, NSVariableStatusItemLength, NSView, NSWorkspace,
 };
 use objc2_foundation::{
     NSArray, NSEdgeInsets, NSObject, NSPoint, NSRect, NSSize, NSString, NSTimeInterval, NSTimer,
@@ -88,8 +89,35 @@ define_class!(
     struct RefreshController;
 
     impl RefreshController {
+        #[unsafe(method(showStatusMenu:))]
+        fn show_status_menu(&self, _sender: *mut AnyObject) {
+            let popup = APP_STATE.with(|cell| {
+                let borrow = cell.borrow();
+                let Some(state) = borrow.as_ref() else {
+                    return None;
+                };
+                let Some(mtm) = MainThreadMarker::new() else {
+                    return None;
+                };
+                let Some(button) = state.status_item.button(mtm) else {
+                    return None;
+                };
+                Some((state.menu.clone(), button))
+            });
+            let Some((menu, button)) = popup else {
+                return;
+            };
+
+            menu.update();
+            let menu_width = menu.size().width;
+            let button_width = button.bounds().size.width;
+            let location = NSPoint::new((button_width - menu_width) / 2.0, 0.0);
+            menu.popUpMenuPositioningItem_atLocation_inView(None, location, Some(&button));
+        }
+
         #[unsafe(method(handleRefresh:))]
         fn handle_refresh(&self, _sender: *mut AnyObject) {
+            close_status_menu();
             refresh_now(true);
             // Reopen the menu on the next run-loop pass so the user can watch
             // the data update in place after a manual ⌘R press.
@@ -117,6 +145,7 @@ define_class!(
 
         #[unsafe(method(openRepo:))]
         fn open_repo(&self, _sender: *mut AnyObject) {
+            close_status_menu();
             open_url(REPO_URL);
         }
 
@@ -124,6 +153,7 @@ define_class!(
         // to menu items wired directly to that selector.
         #[unsafe(method(handleQuit:))]
         fn handle_quit(&self, _sender: *mut AnyObject) {
+            close_status_menu();
             if let Some(mtm) = MainThreadMarker::new() {
                 unsafe { NSApplication::sharedApplication(mtm).terminate(None) };
             }
@@ -171,7 +201,12 @@ ccbar is running inside macOS AppTranslocation sandbox, which pins CPU at 100%.
 
     let menu = NSMenu::new(mtm);
     let controller = RefreshController::new(mtm);
-    status_item.setMenu(Some(&menu));
+    if let Some(button) = status_item.button(mtm) {
+        unsafe {
+            button.setTarget(Some(&controller));
+            button.setAction(Some(sel!(showStatusMenu:)));
+        }
+    }
 
     let initial = fetch_state();
     let activity = activity::detect();
@@ -428,7 +463,7 @@ fn populate_menu(
             ProviderState::Ok(snap) => {
                 provider_count += 1;
                 let local = snap.fetched_at.with_timezone(&chrono::Local);
-                let updated = format!("Updated {}", local.format("%H:%M"));
+                let updated = format!("↻ {}", local.format("%H:%M"));
                 add_row(menu, mtm, &["Claude", &updated]);
                 add_window_section(menu, mtm, "Session", Some(&snap.session));
                 add_window_section(menu, mtm, "Weekly", snap.weekly.as_ref());
@@ -456,13 +491,8 @@ fn populate_menu(
                 }
                 provider_count += 1;
                 let local = snapshot.fetched_at.with_timezone(&chrono::Local);
-                let updated = format!("Updated {}", local.format("%H:%M"));
-                let title = snapshot
-                    .plan
-                    .as_deref()
-                    .map(|plan| format!("Codex · {}", plan.to_uppercase()))
-                    .unwrap_or_else(|| "Codex".into());
-                add_row(menu, mtm, &[&title, &updated]);
+                let updated = format!("↻ {}", local.format("%H:%M"));
+                add_row(menu, mtm, &["Codex", &updated]);
 
                 for window in &snapshot.windows {
                     add_window_section(menu, mtm, &window.label, Some(&window.state));
@@ -487,31 +517,7 @@ fn populate_menu(
     }
     menu.addItem(&NSMenuItem::separatorItem(mtm));
 
-    let refresh = NSMenuItem::new(mtm);
-    refresh.setTitle(&NSString::from_str("Refresh"));
-    refresh.setKeyEquivalent(&NSString::from_str("r"));
-    unsafe {
-        refresh.setTarget(Some(controller));
-        refresh.setAction(Some(sel!(handleRefresh:)));
-    }
-    menu.addItem(&refresh);
-
-    let about = NSMenuItem::new(mtm);
-    about.setTitle(&NSString::from_str("Open on GitHub"));
-    unsafe {
-        about.setTarget(Some(controller));
-        about.setAction(Some(sel!(openRepo:)));
-    }
-    menu.addItem(&about);
-
-    let quit = NSMenuItem::new(mtm);
-    quit.setTitle(&NSString::from_str("Quit"));
-    quit.setKeyEquivalent(&NSString::from_str("q"));
-    unsafe {
-        quit.setTarget(Some(controller));
-        quit.setAction(Some(sel!(handleQuit:)));
-    }
-    menu.addItem(&quit);
+    add_action_row(menu, mtm, controller);
 }
 
 fn window_summary(w: &WindowState) -> String {
@@ -527,22 +533,18 @@ fn window_summary(w: &WindowState) -> String {
 fn add_window_section(menu: &NSMenu, mtm: MainThreadMarker, label: &str, w: Option<&WindowState>) {
     match w {
         Some(w) => {
-            add_row(
+            add_usage_row(
                 menu,
                 mtm,
-                &[label, &make_bar(w.fraction_used, 8), &window_summary(w)],
+                label,
+                w.fraction_used,
+                &window_summary(w),
             );
         }
         None => {
             add_row(menu, mtm, &[label, "no data"]);
         }
     }
-}
-
-fn make_bar(fraction_used: f64, width: usize) -> String {
-    let filled = (fraction_used.clamp(0.0, 1.0) * width as f64).round() as usize;
-    let empty = width.saturating_sub(filled);
-    "█".repeat(filled) + &"░".repeat(empty)
 }
 
 fn load_symbol(name: &str) -> Option<Retained<NSImage>> {
@@ -674,7 +676,18 @@ fn render_idle_icon() -> Retained<NSImage> {
 
 #[cfg(test)]
 mod icon_tests {
-    use super::weekly_meters;
+    use super::{menu_meter_widths, weekly_meters};
+
+    #[test]
+    fn menu_meter_keeps_exact_remaining_width() {
+        let (used, remaining) = menu_meter_widths(0.85, 90.0);
+        assert!((used - 76.5).abs() < f64::EPSILON);
+        assert!((remaining - 13.5).abs() < f64::EPSILON);
+
+        let (used, remaining) = menu_meter_widths(0.12, 90.0);
+        assert!((used - 10.8).abs() < 1e-12);
+        assert!((remaining - 79.2).abs() < f64::EPSILON);
+    }
 
     #[test]
     fn weekly_meters_follow_active_providers() {
@@ -694,6 +707,17 @@ fn open_url(s: &str) {
     unsafe { workspace.openURL(&url) };
 }
 
+fn close_status_menu() {
+    let menu = APP_STATE.with(|cell| {
+        cell.borrow()
+            .as_ref()
+            .map(|state| state.menu.clone())
+    });
+    if let Some(menu) = menu {
+        menu.cancelTracking();
+    }
+}
+
 fn add_label(menu: &NSMenu, mtm: MainThreadMarker, text: impl AsRef<str>) {
     let item = NSMenuItem::new(mtm);
     item.setTitle(&NSString::from_str(text.as_ref()));
@@ -701,18 +725,162 @@ fn add_label(menu: &NSMenu, mtm: MainThreadMarker, text: impl AsRef<str>) {
     menu.addItem(&item);
 }
 
+const ROW_WIDTH: f64 = 270.0;
+const ROW_HEIGHT: f64 = 26.0;
+const H_INSET: f64 = 14.0; // matches native menu item horizontal padding
+const LEFT_COL_WIDTH: f64 = 75.0;
+const BAR_COL_WIDTH: f64 = 90.0;
+const RIGHT_COL_WIDTH: f64 = 75.0; // wide enough for "XX%  Xd XXh"
+
+fn add_action_row(menu: &NSMenu, mtm: MainThreadMarker, controller: &RefreshController) {
+    const ACTION_ROW_HEIGHT: f64 = 42.0;
+
+    let button = |title: &str, action, key: Option<&str>| {
+        let button = unsafe {
+            NSButton::buttonWithTitle_target_action(
+                &NSString::from_str(title),
+                Some(controller),
+                Some(action),
+                mtm,
+            )
+        };
+        button.setBezelStyle(NSBezelStyle::AccessoryBarAction);
+        if let Some(key) = key {
+            button.setKeyEquivalent(&NSString::from_str(key));
+            button.setKeyEquivalentModifierMask(NSEventModifierFlags::Command);
+        }
+        button
+    };
+
+    let refresh = button("Refresh", sel!(handleRefresh:), Some("r"));
+    let github = button("GitHub", sel!(openRepo:), None);
+    let quit = button("Quit", sel!(handleQuit:), Some("q"));
+    let views = [
+        refresh.into_super().into_super(),
+        github.into_super().into_super(),
+        quit.into_super().into_super(),
+    ];
+    let views: Retained<NSArray<NSView>> = NSArray::from_retained_slice(&views);
+    let stack = unsafe { NSStackView::stackViewWithViews(&views, mtm) };
+    unsafe {
+        stack.setOrientation(NSUserInterfaceLayoutOrientation::Horizontal);
+        stack.setDistribution(NSStackViewDistribution::FillEqually);
+        stack.setSpacing(6.0);
+        stack.setEdgeInsets(NSEdgeInsets {
+            top: 6.0,
+            left: 10.0,
+            bottom: 6.0,
+            right: 10.0,
+        });
+        stack.setFrame(NSRect::new(
+            NSPoint::new(0.0, 0.0),
+            NSSize::new(ROW_WIDTH, ACTION_ROW_HEIGHT),
+        ));
+    }
+
+    let item = NSMenuItem::new(mtm);
+    item.setView(Some(&stack));
+    menu.addItem(&item);
+}
+
+fn menu_meter_widths(fraction_used: f64, total_width: f64) -> (f64, f64) {
+    let used_width = fraction_used.clamp(0.0, 1.0) * total_width;
+    (used_width, total_width - used_width)
+}
+
+/// Draws the used portion thick and the exact remaining portion thin.
+/// Segment gaps preserve the existing eight-cell appearance without rounding
+/// the percentage to whole text characters.
+fn render_menu_meter(fraction_used: f64) -> Retained<NSImage> {
+    const HEIGHT: f64 = 14.0;
+    const SEGMENTS: usize = 8;
+    const GAP: f64 = 0.5;
+    const THICK_HEIGHT: f64 = 12.0;
+    const THIN_HEIGHT: f64 = 6.0;
+
+    let size = NSSize::new(BAR_COL_WIDTH, HEIGHT);
+    let image = unsafe { NSImage::initWithSize(NSImage::alloc(), size) };
+    let (used_width, _) = menu_meter_widths(fraction_used, BAR_COL_WIDTH);
+    let segment_width = BAR_COL_WIDTH / SEGMENTS as f64;
+
+    unsafe { image.lockFocus() };
+    unsafe { NSColor::secondaryLabelColor().set() };
+
+    for index in 0..SEGMENTS {
+        let start = index as f64 * segment_width;
+        let end = ((index + 1) as f64 * segment_width - GAP).min(BAR_COL_WIDTH);
+
+        let thin = NSRect::new(
+            NSPoint::new(start, (HEIGHT - THIN_HEIGHT) / 2.0),
+            NSSize::new(end - start, THIN_HEIGHT),
+        );
+        unsafe { NSBezierPath::fillRect(thin) };
+
+        let thick_end = used_width.min(end);
+        if thick_end > start {
+            let thick = NSRect::new(
+                NSPoint::new(start, (HEIGHT - THICK_HEIGHT) / 2.0),
+                NSSize::new(thick_end - start, THICK_HEIGHT),
+            );
+            unsafe { NSBezierPath::fillRect(thick) };
+        }
+    }
+
+    unsafe { image.unlockFocus() };
+    image.setTemplate(true);
+    image
+}
+
+fn add_usage_row(
+    menu: &NSMenu,
+    mtm: MainThreadMarker,
+    label_text: &str,
+    fraction_used: f64,
+    summary_text: &str,
+) {
+    let label = NSTextField::labelWithString(&NSString::from_str(label_text), mtm);
+    unsafe {
+        label.setTextColor(Some(&NSColor::secondaryLabelColor()));
+        label
+            .widthAnchor()
+            .constraintEqualToConstant(LEFT_COL_WIDTH)
+            .setActive(true);
+    }
+
+    let meter_image = render_menu_meter(fraction_used);
+    let meter = NSImageView::imageViewWithImage(&meter_image, mtm);
+    unsafe {
+        meter.setImageScaling(NSImageScaling::ScaleNone);
+        meter
+            .widthAnchor()
+            .constraintEqualToConstant(BAR_COL_WIDTH)
+            .setActive(true);
+        meter.heightAnchor().constraintEqualToConstant(14.0).setActive(true);
+    }
+
+    let summary = NSTextField::labelWithString(&NSString::from_str(summary_text), mtm);
+    unsafe {
+        summary.setTextColor(Some(&NSColor::secondaryLabelColor()));
+        summary.setAlignment(NSTextAlignment::Right);
+        summary
+            .widthAnchor()
+            .constraintEqualToConstant(RIGHT_COL_WIDTH)
+            .setActive(true);
+    }
+
+    let views = [
+        label.into_super().into_super(),
+        meter.into_super().into_super(),
+        summary.into_super().into_super(),
+    ];
+    add_row_views(menu, mtm, &views);
+}
+
 /// Horizontal row of N secondary-color labels laid out via NSStackView with
 /// `.equalSpacing` — first hugs left, last hugs right, the rest spaced evenly.
 /// The last column is pinned to a fixed width + right-aligned so variable
 /// summary strings (e.g. "100%" vs "76% 3h 35m") don't shift the bar column.
 fn add_row(menu: &NSMenu, mtm: MainThreadMarker, cols: &[&str]) {
-    const ROW_WIDTH: f64 = 320.0;
-    const ROW_HEIGHT: f64 = 26.0;
-    const H_INSET: f64 = 14.0; // matches native menu item horizontal padding
-    const LEFT_COL_WIDTH: f64 = 110.0;
-    const BAR_COL_WIDTH: f64 = 90.0;
-    const RIGHT_COL_WIDTH: f64 = 90.0; // wide enough for "XX%  Xd XXh"
-
     let n = cols.len();
     let views: Vec<Retained<NSView>> = cols
         .iter()
@@ -732,14 +900,20 @@ fn add_row(menu: &NSMenu, mtm: MainThreadMarker, cols: &[&str]) {
             }
             if i + 1 == n && n >= 2 {
                 unsafe { label.setAlignment(NSTextAlignment::Right) };
-                let anchor = unsafe { label.widthAnchor() };
-                let constraint = unsafe { anchor.constraintEqualToConstant(RIGHT_COL_WIDTH) };
-                unsafe { constraint.setActive(true) };
+                if n >= 3 {
+                    let anchor = unsafe { label.widthAnchor() };
+                    let constraint = unsafe { anchor.constraintEqualToConstant(RIGHT_COL_WIDTH) };
+                    unsafe { constraint.setActive(true) };
+                }
             }
             // NSTextField -> NSControl -> NSView.
             label.into_super().into_super()
         })
         .collect();
+    add_row_views(menu, mtm, &views);
+}
+
+fn add_row_views(menu: &NSMenu, mtm: MainThreadMarker, views: &[Retained<NSView>]) {
     let views: Retained<NSArray<NSView>> = NSArray::from_retained_slice(&views);
 
     let stack = unsafe { NSStackView::stackViewWithViews(&views, mtm) };
