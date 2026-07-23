@@ -16,30 +16,29 @@ Codex** usage quotas right in the menu bar.
 [`objc2`]: https://github.com/madsmtm/objc2
 
 ```
- ┌─────────────────────────────────────────┐
- │  Claude                   Updated 12:41 │
- │ ─────────────────────────────────────── │
- │  Session    ██░░░░░░      72%  4h 8m    │
- │ ─────────────────────────────────────── │
- │  Weekly     ██████░░      97%  1d 18h   │
- │ ─────────────────────────────────────── │
- │  Fable      ████████      100%          │
- │ ─────────────────────────────────────── │
- │  Codex · PRO              Updated 12:41 │
- │ ─────────────────────────────────────── │
- │  Weekly     ██░░░░░░      97%  6d 12h   │
- │ ─────────────────────────────────────── │
- │  Refresh                           ⌘R   │
- │  Open on GitHub                         │
- │  Quit                              ⌘Q   │
- └─────────────────────────────────────────┘
+ ┌─────────────────────────────────────┐
+ │  Claude                     ↻ 18:35 │
+ │  Session     ────────        100%   │
+ │  Weekly      ███████─    15%  2d 12h│
+ │  Fable       █████───    34%  2d 12h│
+ │ ─────────────────────────────────── │
+ │  Codex                      ↻ 18:35 │
+ │  Weekly      ██████──     29%  5d 7h│
+ │ ─────────────────────────────────── │
+ │   [ Refresh ]  [ GitHub ]  [ Quit ] │
+ └─────────────────────────────────────┘
 ```
 
 The status bar icon shows the Weekly quota for each active provider. It uses two
 meters when both Claude and Codex are active, one centered meter when only one
 is active, and a low-contrast translucent solid tile when neither is active.
-Reset times remain in the expanded menu. Template mode auto-inverts for
-light/dark bars.
+The expanded menu is centered beneath the status icon. Thick meter segments
+show quota used and thin segments show quota remaining. The eight-segment look
+is drawn at pixel precision, so the thick/thin boundary still follows the real
+percentage instead of rounding to whole text cells. The right column shows
+quota remaining and its reset countdown. Refresh / GitHub / Quit are grouped
+into three rounded buttons on one row; Refresh and Quit retain ⌘R / ⌘Q.
+Template mode auto-inverts for light/dark bars.
 
 Anthropic caps each Claude account with three independent windows — Session
 (5h rolling), Weekly (7d all-models), and a 7-day window carved out for the
@@ -100,6 +99,21 @@ file-backed credentials (normally `~/.codex/auth.json`). API-key-only accounts
 do not have the subscription quotas shown here.
 
 Building from source: `cargo build --release && ./packaging/bundle.sh release`.
+
+### One-off local customization cleanup
+
+When the repository was cloned only for a one-off local customization, wrap up
+in this order:
+
+1. Run the relevant tests, commit the functional change, and push it.
+2. Synchronize the README, then commit and push that documentation separately.
+3. Build the release from the final source, install it at
+   `/Applications/ccbar.app`, then verify its signature, launch, and actual UI.
+4. Confirm the remote contains every commit and the worktree is clean before
+   clearing build and ccbar application caches.
+5. Move the repository to the macOS Trash only after the user explicitly
+   confirms that the local source is no longer needed. Do not permanently
+   delete it; the installed app remains unaffected.
 
 ## How it works
 
