@@ -34,8 +34,9 @@
  └─────────────────────────────────────────┘
 ```
 
-菜单栏图标最多只显示两条 meter：Claude 当前 5 小时 Session，以及 Codex
-Weekly 额度。重置时间在点开菜单后展示。template 模式会根据菜单栏深/浅色自动反色。
+菜单栏图标按当前活跃的服务显示 Weekly 额度：Claude 和 Codex 都活跃时显示两条，
+只有一个活跃时显示一条并垂直居中；都不活跃时显示一个低对比度的半透明实心方块。
+重置时间在点开菜单后展示。template 模式会根据菜单栏深/浅色自动反色。
 
 Anthropic 对每个 Claude 账号设三个独立的配额窗口 —— Session（5 小时滚动）、
 Weekly（7 天所有模型累计）、以及一个给当前顶级模型单开的 7 天窗口 —— 任何一个
@@ -52,13 +53,14 @@ Codex 同样使用服务端自描述数据。ccbar 只从主 `rate_limit` 中选
 
 ## 安装
 
-当前源码版本为 **v0.3.0**，支持 Claude + Codex 动态显示。源码构建命令见下方。
+当前源码版本为 **v0.3.1**，支持 Claude + Codex 动态显示；菜单栏图标会按当前活跃
+服务展示各自的 Weekly 额度。源码构建命令见下方。
 
 > ### **[⬇ ccbar v0.2.9 — 259 KB zip](https://github.com/GuinsooRocky/ccbar/releases/download/v0.2.9/ccbar-v0.2.9-macos.zip)**
 >
 > macOS 14+（Apple Silicon + Intel）· ad-hoc 签名 · 未做 notarization
 
-> 已发布的 v0.2.9 安装包只含 Claude；v0.3.0 发布前请从源码构建新版。
+> 已发布的 v0.2.9 安装包只含 Claude；v0.3.1 发布前请从源码构建新版。
 
 > ⚠️ **不要在 Downloads / Desktop 里原地双击**解压出来的 `ccbar.app`。
 > 必须先拖到 `/Applications`，否则 macOS 会把未签名 app 放进 **AppTranslocation

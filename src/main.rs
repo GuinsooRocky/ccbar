@@ -560,25 +560,36 @@ fn update_icon(
     let Some(button) = status_item.button(mtm) else {
         return;
     };
-    let mut meters = Vec::with_capacity(2);
-    if activity.claude {
-        if let ProviderState::Ok(snapshot) = &state.claude {
-            meters.push(snapshot.session.fraction_used);
-        }
-    }
-    if activity.codex {
-        if let ProviderState::Ok(snapshot) = &state.codex {
-            if let Some(window) = snapshot.status_window() {
-                meters.push(window.state.fraction_used);
+    let claude_weekly = if activity.claude {
+        match &state.claude {
+            ProviderState::Ok(snapshot) => {
+                snapshot.weekly.as_ref().map(|window| window.fraction_used)
             }
+            _ => None,
         }
-    }
+    } else {
+        None
+    };
+    let codex_weekly = if activity.codex {
+        match &state.codex {
+            ProviderState::Ok(snapshot) => snapshot
+                .status_window()
+                .map(|window| window.state.fraction_used),
+            _ => None,
+        }
+    } else {
+        None
+    };
+    let meters = weekly_meters(claude_weekly, codex_weekly);
 
     if meters.is_empty() {
         let symbol = if activity.claude || activity.codex {
             "exclamationmark.triangle.fill"
         } else {
-            "pause.circle.fill"
+            let img = render_idle_icon();
+            button.setImage(Some(&img));
+            button.setTitle(&NSString::from_str(""));
+            return;
         };
         if let Some(img) = load_symbol(symbol) {
             button.setImage(Some(&img));
@@ -592,7 +603,11 @@ fn update_icon(
     button.setTitle(&NSString::from_str(""));
 }
 
-/// At most two meters: Claude's 5h session and Codex's weekly quota.
+fn weekly_meters(claude: Option<f64>, codex: Option<f64>) -> Vec<f64> {
+    claude.into_iter().chain(codex).collect()
+}
+
+/// At most two meters: each active provider's weekly quota, in Claude/Codex order.
 fn render_meter_icon(meters: &[f64]) -> Retained<NSImage> {
     let size = NSSize::new(22.0, 16.0);
     let image = unsafe { NSImage::initWithSize(NSImage::alloc(), size) };
@@ -633,6 +648,41 @@ fn render_meter_icon(meters: &[f64]) -> Retained<NSImage> {
     unsafe { image.unlockFocus() };
     image.setTemplate(true);
     image
+}
+
+/// A quiet translucent tile for when neither provider is active.
+fn render_idle_icon() -> Retained<NSImage> {
+    let size = NSSize::new(22.0, 16.0);
+    let image = unsafe { NSImage::initWithSize(NSImage::alloc(), size) };
+
+    unsafe { image.lockFocus() };
+
+    let tile = NSRect::new(NSPoint::new(7.0, 4.0), NSSize::new(8.0, 8.0));
+    let tile_color = unsafe { NSColor::labelColor().colorWithAlphaComponent(0.28) };
+    unsafe { tile_color.set() };
+    unsafe { NSBezierPath::fillRect(tile) };
+
+    let sheen = NSRect::new(NSPoint::new(8.0, 10.0), NSSize::new(6.0, 1.0));
+    let sheen_color = unsafe { NSColor::labelColor().colorWithAlphaComponent(0.16) };
+    unsafe { sheen_color.set() };
+    unsafe { NSBezierPath::fillRect(sheen) };
+
+    unsafe { image.unlockFocus() };
+    image.setTemplate(true);
+    image
+}
+
+#[cfg(test)]
+mod icon_tests {
+    use super::weekly_meters;
+
+    #[test]
+    fn weekly_meters_follow_active_providers() {
+        assert_eq!(weekly_meters(Some(0.83), Some(0.56)), vec![0.83, 0.56]);
+        assert_eq!(weekly_meters(Some(0.83), None), vec![0.83]);
+        assert_eq!(weekly_meters(None, Some(0.56)), vec![0.56]);
+        assert!(weekly_meters(None, None).is_empty());
+    }
 }
 
 fn open_url(s: &str) {

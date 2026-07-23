@@ -35,9 +35,11 @@ Codex** usage quotas right in the menu bar.
  └─────────────────────────────────────────┘
 ```
 
-The status bar icon shows at most two meters: Claude's current 5-hour Session
-and Codex's Weekly quota. Reset times remain in the expanded menu. Template
-mode auto-inverts for light/dark bars.
+The status bar icon shows the Weekly quota for each active provider. It uses two
+meters when both Claude and Codex are active, one centered meter when only one
+is active, and a low-contrast translucent solid tile when neither is active.
+Reset times remain in the expanded menu. Template mode auto-inverts for
+light/dark bars.
 
 Anthropic caps each Claude account with three independent windows — Session
 (5h rolling), Weekly (7d all-models), and a 7-day window carved out for the
@@ -57,14 +59,15 @@ model-specific entries in `additional_rate_limits`.
 
 ## Install
 
-The current source version is **v0.3.0**, with dynamic Claude + Codex display.
+The current source version is **v0.3.1**, with dynamic Claude + Codex display
+and active-provider Weekly meters in the status bar.
 See the source-build command below.
 
 > ### **[⬇ ccbar v0.2.9 — 259 KB zip](https://github.com/GuinsooRocky/ccbar/releases/download/v0.2.9/ccbar-v0.2.9-macos.zip)**
 >
 > macOS 14+ (Apple Silicon + Intel) · ad-hoc signed · no notarization
 
-> The published v0.2.9 build is Claude-only; build v0.3.0 from source until its
+> The published v0.2.9 build is Claude-only; build v0.3.1 from source until its
 > release is published.
 
 > ⚠️ **Do NOT double-click `ccbar.app` in Downloads / Desktop** after unzipping.
